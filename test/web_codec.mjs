@@ -17,6 +17,8 @@ const {
   decodeString,
   solToLamports,
   encodeString,
+  wireEncode,
+  wireDecode,
   extractPayment,
   formatSol,
   assembleSigBlob,
@@ -52,9 +54,11 @@ const nonce = new Uint8Array(32).fill(0x33);
 const lamports = 1_500_000_000n;
 const payment = { lamports, dest, nonceAccount, nonce };
 const encoded = await encodeString(payment);
-assert.equal(encoded.payload[0], 0x02);
+assert.equal(encoded.payload[0], 0x03);
 assert.equal(encoded.payload.length, 105);
-assert.ok(encoded.groups.length >= 1);
+assert.equal(encoded.groups.length, 22);
+assert.equal(encoded.hashBytes, 5);
+assert.equal(encoded.typedCount, 176);
 assert.ok(encoded.groups.every((g) => g.length === 8));
 const back = await decodeString(encoded.groups.join(""));
 assert.equal(back.lamports, lamports);
@@ -68,13 +72,42 @@ const tmp = swap[0];
 swap[0] = swap[1];
 swap[1] = tmp;
 const swapped = swap.join("") + encoded.groups.slice(1).join("");
-await assert.rejects(decodeString(swapped), /end check|does not check/);
+await assert.rejects(decodeString(swapped), /String length is wrong|end check|does not check/);
 
 const bad = chars.slice();
 const nextCh = bad[0] === "2" ? "3" : "2";
 bad[0] = nextCh;
 const substituted = bad.join("") + encoded.groups.slice(1).join("");
-await assert.rejects(decodeString(substituted));
+await assert.rejects(decodeString(substituted), /Group 1 does not check/);
+
+const slipped = encoded.groups.slice();
+const slipChars = slipped[18].split("");
+slipChars[7] = slipChars[7] === "E" ? "D" : "E";
+slipped[18] = slipChars.join("");
+await assert.rejects(decodeString(slipped.join("")), /Group 19 does not check/);
+
+const vectorPayload = Buffer.from(
+  "030faeab7cad092b33f79ee571edaf6bc756e95f749304fefed025820cdaef25" +
+  "84b3100bedb47e2a67552727800804070864f69b704d9405666c1f7a6c4c448d" +
+  "c81fed75ca7bf8df57ec2524829cca7999c510c378467921028f8951c841e7d7" +
+  "646ce2ff034365be1f",
+  "hex"
+);
+const vectorGroups = (
+  "1P114SJA TQX1q7dv Xedziw3S QKcokA11 NwVuk6sN A91RthRh " +
+  "GUgXTJM1 9mXE6D4z 7rf9fT2s bhyRkRaP uPDYuaqK xzZCz6cM " +
+  "zoCqdBGr 3qe3fFPp 5bD95r72 YriDimrc Te8Ei9AS zyyP6vi1 " +
+  "n1AJwrcc WLLQFfFh ywNSRtzy L7sQVCm8"
+).split(/\s+/);
+assert.equal((await wireEncode(vectorPayload)).join(" "), vectorGroups.join(" "));
+assert.equal(
+  Buffer.from(await wireDecode(vectorGroups.join(""))).toString("hex"),
+  vectorPayload.toString("hex")
+);
+
+const oldPayload = new Uint8Array(encoded.payload);
+oldPayload[0] = 0x02;
+await assert.rejects(decodeString((await wireEncode(oldPayload)).join("")), /old app/);
 
 const spaced = encoded.groups.join("  ");
 const fromSpaces = await decodeString(spaced);

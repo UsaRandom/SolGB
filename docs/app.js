@@ -583,7 +583,9 @@ function renderType() {
   ))));
   screen.append(
     h("h1", {}, ["Type this"]),
-    h("p", { class: "lead" }, ["Type every character. Skip the small number."]),
+    h("p", { class: "lead" }, [
+      "Type every character. " + state.result.groups.length + " groups. Skip the small number.",
+    ]),
     h("div", { class: "type-sheet" }, [
       ...rows,
       h("details", {}, [
