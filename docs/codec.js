@@ -1,41 +1,24 @@
-// DogeGB typed-payment string, format version 1.
-//
-// The page builds these bytes and base58-encodes them. Every line is 8
-// characters. The 8th is the mod-58 sum of the first 7. A payment line uses
-// that sum. The checksum line adds 1..7, and the amount added is how many
-// payment characters sit at the front of that line (0..6). Two to six
-// leftover payment characters make the checksum two lines. The hash fills
-// every spare character.
-//
-// Bytes, big-endian:
-//   0x01            version
-//   u8              input count, 1..4
-//   repeated:
-//     32            txid, block-explorer order
-//     u16           vout
-//     u64           value, koinu
-//   u64             pay value, koinu
-//   u32             fee, koinu
-//   u8              0 = pay-to-address, 1 = pay-to-script
-//   20              hash160 of the destination
-//
-// Change is not in the string. It is the inputs minus the payment minus
-// the fee, and it pays this wallet. Version, locktime, and sequence stay
-// at 1, 0, and 0xffffffff and are not in the string.
-
-globalThis.DogeCodec = (function () {
+globalThis.SolCodec = (function () {
 const ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-const KOINU = 100_000_000n;
-const DUST = 1_000_000n;
-const MAX_INPUTS = 4;
-const FORMAT_VERSION = 0x01;
+const LAMPORTS_PER_SOL = 1_000_000_000n;
+const FORMAT_VERSION = 0x02;
+const PAYLOAD_LEN = 105;
+/* SysvarRecentB1ockHashes11111111111111111111. The advance instruction
+   names this account. The 1 in B1ock is part of the address. */
+const SYSVAR_RECENT = new Uint8Array([
+  0x06, 0xa7, 0xd5, 0x17, 0x19, 0x2c, 0x56, 0x8e,
+  0xe0, 0x8a, 0x84, 0x5f, 0x73, 0xd2, 0x97, 0x88,
+  0xcf, 0x03, 0x5c, 0x31, 0x45, 0xb2, 0x1a, 0xb3,
+  0x44, 0xd8, 0x06, 0x2e, 0xa9, 0x40, 0x00, 0x00,
+]);
+const SYSTEM_PROGRAM = new Uint8Array(32);
 // Hash characters available for leftover counts 0..6, then the most bytes
 // that still fit in that many base58 digits.
 const HASH_CHARS = [7, 6, 12, 11, 10, 9, 8];
 const HASH_BYTES = [5, 4, 8, 8, 7, 6, 5];
-
-const P2PKH = 0x1e;
-const P2SH = 0x16;
+const SIG_PAGE_DATA = 51;
+const SIG_PAGE_MAX = 7;
+const ADDRESS_RUN = /[1-9A-HJ-NP-Za-km-z]{32,44}/;
 
 function alphabetIndex(ch) {
   const i = ALPHABET.indexOf(ch);
@@ -62,7 +45,7 @@ function b58encode(data) {
 function b58decode(text) {
   let n = 0n;
   for (const ch of text) n = n * 58n + BigInt(alphabetIndex(ch));
-  let body = [];
+  const body = [];
   while (n > 0n) {
     body.push(Number(n & 0xffn));
     n >>= 8n;
@@ -87,18 +70,22 @@ async function sha256d(data) {
   return sha256(await sha256(data));
 }
 
-function b58checkDecode(text) {
-  const raw = b58decode(text.trim());
-  if (raw.length < 5) throw new Error("Address is too short.");
-  return { body: raw.slice(0, -4), checksum: raw.slice(-4) };
+function bytesEq(a, b) {
+  if (!a || !b || a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
 }
 
-const ADDRESS_RUN = /[1-9A-HJ-NP-Za-km-z]{25,44}/;
+function keyBytes(text) {
+  const raw = b58decode(String(text).trim());
+  if (raw.length !== 32) throw new Error("Address is not 32 bytes.");
+  return raw;
+}
 
 function extractPayment(raw) {
   let text = String(raw).replace(/\0/g, " ").trim();
   let amount = null;
-  const uri = text.match(/dogecoin:([^?\s]+)(?:\?(\S+))?/i);
+  const uri = text.match(/solana:([^?\s]+)(?:\?(\S+))?/i);
   if (uri) {
     text = decodeURIComponent(uri[1]);
     if (uri[2]) {
@@ -107,175 +94,91 @@ function extractPayment(raw) {
     }
   }
   const found = text.match(ADDRESS_RUN);
-  if (!found) throw new Error("That code is not a Dogecoin address.");
+  if (!found) throw new Error("That code is not a Solana address.");
+  keyBytes(found[0]);
   return { address: found[0], amount };
 }
 
-async function decodeAddress(text) {
-  const trimmed = text.trim();
-  const { body, checksum } = b58checkDecode(trimmed);
-  const hash = await sha256d(body);
-  for (let i = 0; i < 4; i++) {
-    if (hash[i] !== checksum[i]) throw new Error("Address checksum does not match.");
-  }
-  if (body.length !== 21) throw new Error("Address payload is the wrong length.");
-  const version = body[0];
-  const hash160 = body.slice(1);
-  if (version === P2PKH) return { kind: "p2pkh", typeByte: 0, hash160, text: trimmed };
-  if (version === P2SH) return { kind: "p2sh", typeByte: 1, hash160, text: trimmed };
-  throw new Error("Address version 0x" + version.toString(16) + " is not Dogecoin.");
+function decodeAddress(text) {
+  const trimmed = String(text).trim();
+  const pubkey = keyBytes(trimmed);
+  return { text: trimmed, pubkey };
 }
 
-function scriptP2pkh(hash160) {
-  const out = new Uint8Array(25);
-  out[0] = 0x76;
-  out[1] = 0xa9;
-  out[2] = 20;
-  out.set(hash160, 3);
-  out[23] = 0x88;
-  out[24] = 0xac;
-  return out;
-}
-
-function dogeToKoinu(text) {
+function solToLamports(text) {
   const s = String(text).trim();
-  if (!/^\d+(\.\d{0,8})?$/.test(s)) {
-    throw new Error("Amount must be a DOGE number with at most 8 decimals.");
+  if (!/^\d+(\.\d{0,9})?$/.test(s)) {
+    throw new Error("Amount must be a SOL number with at most 9 decimals.");
   }
   const [whole, frac = ""] = s.split(".");
-  const padded = (frac + "00000000").slice(0, 8);
-  return BigInt(whole) * KOINU + BigInt(padded);
+  const padded = (frac + "000000000").slice(0, 9);
+  return BigInt(whole) * LAMPORTS_PER_SOL + BigInt(padded);
 }
 
-function formatDoge(koinu) {
-  const neg = koinu < 0n;
-  const v = neg ? -koinu : koinu;
-  const whole = v / KOINU;
-  const frac = (v % KOINU).toString().padStart(8, "0");
+function formatSol(lamports) {
+  const neg = lamports < 0n;
+  const v = neg ? -lamports : lamports;
+  const whole = v / LAMPORTS_PER_SOL;
+  const frac = (v % LAMPORTS_PER_SOL).toString().padStart(9, "0");
   return (neg ? "-" : "") + whole.toString() + "." + frac;
 }
 
-function feeRatePerByte(dogePerKb) {
-  const perKb = dogeToKoinu(dogePerKb);
-  const q = perKb / 1000n;
-  const r = perKb % 1000n;
-  const rate = q + (r >= 500n ? 1n : 0n);
-  return rate < 1n ? 1n : rate;
-}
-
-function estimateSize(numInputs, recipientIsP2sh, withChange) {
-  const p2pkh = (recipientIsP2sh ? 0 : 1) + (withChange ? 1 : 0);
-  const p2sh = recipientIsP2sh ? 1 : 0;
-  return 10 + numInputs * 148 + p2pkh * 34 + p2sh * 32;
-}
-
-function pushU16(out, n) {
-  if (!Number.isInteger(n) || n < 0 || n > 0xffff) {
-    throw new Error("Output index must be 0..65535.");
-  }
-  out.push((n >> 8) & 255, n & 255);
-}
-
-function pushU32(out, n) {
-  if (n < 0n || n > 0xffffffffn) throw new Error("Fee is too large to encode.");
-  let x = n;
-  const b = [0, 0, 0, 0];
-  for (let i = 3; i >= 0; i--) {
-    b[i] = Number(x & 0xffn);
+function writeU64(out, at, n) {
+  let x = BigInt(n);
+  for (let i = 0; i < 8; i++) {
+    out[at + i] = Number(x & 0xffn);
     x >>= 8n;
   }
-  out.push(...b);
 }
 
-function pushU64(out, n) {
-  if (n < 0n || n > 0xffffffffffffffffn) throw new Error("Value does not fit in 8 bytes.");
-  let x = n;
-  const b = [0, 0, 0, 0, 0, 0, 0, 0];
-  for (let i = 7; i >= 0; i--) {
-    b[i] = Number(x & 0xffn);
-    x >>= 8n;
-  }
-  out.push(...b);
-}
-
-function readU16(bytes, p) {
-  return (bytes[p] << 8) | bytes[p + 1];
-}
-
-function readU32(bytes, p) {
-  return (BigInt(bytes[p]) << 24n) | (BigInt(bytes[p + 1]) << 16n) |
-    (BigInt(bytes[p + 2]) << 8n) | BigInt(bytes[p + 3]);
-}
-
-function readU64(bytes, p) {
+function readU64(bytes, at) {
   let n = 0n;
-  for (let i = 0; i < 8; i++) n = (n << 8n) | BigInt(bytes[p + i]);
+  for (let i = 7; i >= 0; i--) n = (n << 8n) + BigInt(bytes[at + i]);
   return n;
 }
 
+function anyByte(bytes) {
+  let z = 0;
+  for (const b of bytes) z |= b;
+  return z !== 0;
+}
+
 function encodePayload(payment) {
-  const inputs = payment.inputs;
-  if (inputs.length < 1 || inputs.length > MAX_INPUTS) {
-    throw new Error("Use 1 to " + MAX_INPUTS + " coins.");
+  if (payment.lamports <= 0n) throw new Error("Amount must be more than 0.");
+  if (!payment.dest || payment.dest.length !== 32) {
+    throw new Error("Destination is not 32 bytes.");
   }
-  const out = [];
-  out.push(FORMAT_VERSION);
-  out.push(inputs.length);
-  let total = 0n;
-  for (const inp of inputs) {
-    const txid = inp.txid.toLowerCase();
-    if (!/^[0-9a-f]{64}$/.test(txid)) throw new Error("A txid must be 64 hex characters.");
-    for (let i = 0; i < 64; i += 2) out.push(parseInt(txid.slice(i, i + 2), 16));
-    pushU16(out, inp.vout);
-    pushU64(out, inp.value);
-    total += inp.value;
+  if (!payment.nonceAccount || payment.nonceAccount.length !== 32) {
+    throw new Error("Nonce account is not 32 bytes.");
   }
-  if (payment.pay <= 0n) throw new Error("Amount must be more than 0.");
-  if (payment.fee < 0n) throw new Error("Fee is negative.");
-  if (total !== payment.pay + payment.fee + payment.change) {
-    throw new Error("Coins, payment, fee, and change do not add up.");
+  if (!payment.nonce || payment.nonce.length !== 32) {
+    throw new Error("Nonce is not 32 bytes.");
   }
-  pushU64(out, payment.pay);
-  pushU32(out, payment.fee);
-  if (payment.typeByte !== 0 && payment.typeByte !== 1) {
-    throw new Error("Destination type is unknown.");
+  if (!anyByte(payment.dest)) throw new Error("That address is not a wallet.");
+  if (!anyByte(payment.nonceAccount) || !anyByte(payment.nonce)) {
+    throw new Error("That nonce is empty.");
   }
-  out.push(payment.typeByte);
-  if (payment.hash160.length !== 20) throw new Error("Destination hash is the wrong length.");
-  for (const b of payment.hash160) out.push(b);
-  return new Uint8Array(out);
+  const out = new Uint8Array(PAYLOAD_LEN);
+  out[0] = FORMAT_VERSION;
+  writeU64(out, 1, payment.lamports);
+  out.set(payment.dest, 9);
+  out.set(payment.nonceAccount, 41);
+  out.set(payment.nonce, 73);
+  return out;
 }
 
 function decodePayload(bytes) {
-  let p = 0;
-  const need = (n) => {
-    if (p + n > bytes.length) throw new Error("String ended early.");
-    const s = bytes.slice(p, p + n);
-    p += n;
-    return s;
-  };
-  const version = need(1)[0];
-  if (version !== FORMAT_VERSION) throw new Error("Unknown string version.");
-  const n = need(1)[0];
-  if (n < 1 || n > MAX_INPUTS) throw new Error("Input count is out of range.");
-  const inputs = [];
-  let total = 0n;
-  for (let i = 0; i < n; i++) {
-    const txidBytes = need(32);
-    let txid = "";
-    for (const b of txidBytes) txid += b.toString(16).padStart(2, "0");
-    const vout = readU16(need(2), 0);
-    const value = readU64(need(8), 0);
-    total += value;
-    inputs.push({ txid, vout, value });
+  if (bytes.length !== PAYLOAD_LEN || bytes[0] !== FORMAT_VERSION) {
+    throw new Error("Payment payload is the wrong length.");
   }
-  const pay = readU64(need(8), 0);
-  const fee = readU32(need(4), 0);
-  const typeByte = need(1)[0];
-  const hash160 = need(20);
-  if (p !== bytes.length) throw new Error("String has extra bytes.");
-  const change = total - pay - fee;
-  return { inputs, pay, fee, change, typeByte, hash160 };
+  const lamports = readU64(bytes, 1);
+  const dest = bytes.slice(9, 41);
+  const nonceAccount = bytes.slice(41, 73);
+  const nonce = bytes.slice(73, 105);
+  if (lamports <= 0n) throw new Error("Amount must be more than 0.");
+  if (!anyByte(dest)) throw new Error("That address is not a wallet.");
+  if (!anyByte(nonceAccount) || !anyByte(nonce)) throw new Error("That nonce is empty.");
+  return { lamports, dest, nonceAccount, nonce };
 }
 
 function sumIndex(chunk) {
@@ -404,119 +307,90 @@ async function decodeString(text) {
   return decodePayload(payload);
 }
 
-function priceFixed(numInputs, totalIn, sendValue, feeRate, recipientIsP2sh) {
-  const withChange = estimateSize(numInputs, recipientIsP2sh, true);
-  const feeWith = BigInt(withChange) * feeRate;
-  const change = totalIn - sendValue - feeWith;
-  if (change >= DUST) {
-    return { fee: feeWith, change, size: withChange, totalIn };
+/* Legacy durable-nonce transfer. AdvanceNonceAccount is first, and the
+   recent-blockhash field is the nonce value. One signature: the wallet,
+   which is the fee payer and the nonce authority. */
+function transferMessage(walletPub, destPub, nonceAccount, nonce, lamports) {
+  if (walletPub.length !== 32 || destPub.length !== 32 ||
+      nonceAccount.length !== 32 || nonce.length !== 32) {
+    throw new Error("A transfer field is the wrong length.");
   }
-  const noChangeSize = estimateSize(numInputs, recipientIsP2sh, false);
-  const feeNo = BigInt(noChangeSize) * feeRate;
-  if (totalIn === sendValue + feeNo) {
-    return { fee: feeNo, change: 0n, size: noChangeSize, totalIn };
-  }
-  if (totalIn >= sendValue + feeNo && change < DUST) {
-    const fee = totalIn - sendValue;
-    if (fee > 0xffffffffn) throw new Error("Fee is too large to encode.");
-    return { fee, change: 0n, size: noChangeSize, totalIn };
-  }
-  return null;
-}
-
-// The signed codes are version 3. Byte 0 is the page, byte 1 is how many
-// pages, and the rest is one slice of the blob. The blob is the 33-byte
-// compressed pubkey, then each signature in input order. A signature is
-// DER and already ends with the SIGHASH_ALL byte, which sits outside the
-// DER length. At most 51 bytes of the blob fit in one code.
-const SIG_PAGE_DATA = 51;
-const SIG_PAGE_MAX = 7;
-
-function ripemd160(message) {
-  const ml = message.length;
-  const withPad = ml + ((ml % 64 < 56) ? (56 - (ml % 64)) : (120 - (ml % 64))) + 8;
-  const padded = new Uint8Array(withPad);
-  padded.set(message);
-  padded[ml] = 0x80;
-  const view = new DataView(padded.buffer);
-  const bits = ml * 8;
-  view.setUint32(withPad - 8, bits >>> 0, true);
-  view.setUint32(withPad - 4, Math.floor(bits / 0x100000000), true);
-
-  let h0 = 0x67452301;
-  let h1 = 0xefcdab89;
-  let h2 = 0x98badcfe;
-  let h3 = 0x10325476;
-  let h4 = 0xc3d2e1f0;
-  const r1 = [
-    0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
-    7, 4, 13, 1, 10, 6, 15, 3, 12, 0, 9, 5, 2, 14, 11, 8,
-    3, 10, 14, 4, 9, 15, 8, 1, 2, 7, 0, 6, 13, 11, 5, 12,
-    1, 9, 11, 10, 0, 8, 12, 4, 13, 3, 7, 15, 14, 5, 6, 2,
-    4, 0, 5, 9, 7, 12, 2, 10, 14, 1, 3, 8, 11, 6, 15, 13,
-  ];
-  const r2 = [
-    5, 14, 7, 0, 9, 2, 11, 4, 13, 6, 15, 8, 1, 10, 3, 12,
-    6, 11, 3, 7, 0, 13, 5, 10, 14, 15, 8, 12, 4, 9, 1, 2,
-    15, 5, 1, 3, 7, 14, 6, 9, 11, 8, 12, 2, 10, 0, 4, 13,
-    8, 6, 4, 1, 3, 11, 15, 0, 5, 12, 2, 13, 9, 7, 10, 14,
-    12, 15, 10, 4, 1, 5, 8, 7, 6, 2, 13, 14, 0, 3, 9, 11,
-  ];
-  const s1 = [
-    11, 14, 15, 12, 5, 8, 7, 9, 11, 13, 14, 15, 6, 7, 9, 8,
-    7, 6, 8, 13, 11, 9, 7, 15, 7, 12, 15, 9, 11, 7, 13, 12,
-    11, 13, 6, 7, 14, 9, 13, 15, 14, 8, 13, 6, 5, 12, 7, 5,
-    11, 12, 14, 15, 14, 15, 9, 8, 9, 14, 5, 6, 8, 6, 5, 12,
-    9, 15, 5, 11, 6, 8, 13, 12, 5, 12, 13, 14, 11, 8, 5, 6,
-  ];
-  const s2 = [
-    8, 9, 9, 11, 13, 15, 15, 5, 7, 7, 8, 11, 14, 14, 12, 6,
-    9, 13, 15, 7, 12, 8, 9, 11, 7, 7, 12, 7, 6, 15, 13, 11,
-    9, 7, 15, 11, 8, 6, 6, 14, 12, 13, 5, 14, 13, 13, 7, 5,
-    15, 5, 8, 11, 14, 14, 6, 14, 6, 9, 12, 9, 12, 5, 15, 8,
-    8, 5, 12, 9, 12, 5, 14, 6, 8, 13, 6, 5, 15, 13, 11, 11,
-  ];
-  const k1 = [0x00000000, 0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xa953fd4e];
-  const k2 = [0x50a28be6, 0x5c4dd124, 0x6d703ef3, 0x7a6d76e9, 0x00000000];
-  const rotl = (x, n) => (x << n) | (x >>> (32 - n));
-  const f = (j, x, y, z) => {
-    if (j < 16) return x ^ y ^ z;
-    if (j < 32) return (x & y) | (~x & z);
-    if (j < 48) return (x | ~y) ^ z;
-    if (j < 64) return (x & z) | (y & ~z);
-    return x ^ (y | ~z);
-  };
-
-  for (let off = 0; off < padded.length; off += 64) {
-    const x = new Uint32Array(16);
-    for (let i = 0; i < 16; i++) x[i] = view.getUint32(off + i * 4, true);
-    let al = h0, bl = h1, cl = h2, dl = h3, el = h4;
-    let ar = h0, br = h1, cr = h2, dr = h3, er = h4;
-    for (let j = 0; j < 80; j++) {
-      const sl = (rotl((al + f(j, bl, cl, dl) + x[r1[j]] + k1[j >>> 4]) | 0, s1[j]) + el) | 0;
-      al = el; el = dl; dl = rotl(cl, 10) | 0; cl = bl; bl = sl;
-      const sr = (rotl((ar + f(79 - j, br, cr, dr) + x[r2[j]] + k2[j >>> 4]) | 0, s2[j]) + er) | 0;
-      ar = er; er = dr; dr = rotl(cr, 10) | 0; cr = br; br = sr;
+  const keys = [];
+  const add = (pub, signer, writable) => {
+    for (const key of keys) {
+      if (!bytesEq(key.pub, pub)) continue;
+      key.signer = key.signer || signer;
+      key.writable = key.writable || writable;
+      return;
     }
-    const t = (h1 + cl + dr) | 0;
-    h1 = (h2 + dl + er) | 0;
-    h2 = (h3 + el + ar) | 0;
-    h3 = (h4 + al + br) | 0;
-    h4 = (h0 + bl + cr) | 0;
-    h0 = t;
+    keys.push({ pub, signer, writable });
+  };
+  add(nonceAccount, false, true);
+  add(SYSVAR_RECENT, false, false);
+  add(walletPub, true, true);
+  add(SYSTEM_PROGRAM, false, false);
+  add(destPub, false, true);
+  const signerW = keys.filter((k) => k.signer && k.writable);
+  const signerR = keys.filter((k) => k.signer && !k.writable);
+  const plainW = keys.filter((k) => !k.signer && k.writable);
+  const plainR = keys.filter((k) => !k.signer && !k.writable);
+  const ordered = signerW.concat(signerR, plainW, plainR);
+  const at = (pub) => {
+    for (let i = 0; i < ordered.length; i++) {
+      if (bytesEq(ordered[i].pub, pub)) return i;
+    }
+    throw new Error("A transfer account is missing.");
+  };
+  const msg = new Uint8Array(3 + 1 + ordered.length * 32 + 32 + 1 + 10 + 17);
+  let o = 0;
+  msg[o++] = signerW.length + signerR.length;
+  msg[o++] = signerR.length;
+  msg[o++] = plainR.length;
+  msg[o++] = ordered.length;
+  for (const key of ordered) {
+    msg.set(key.pub, o);
+    o += 32;
   }
-  const out = new Uint8Array(20);
-  const words = new DataView(out.buffer);
-  words.setUint32(0, h0, true);
-  words.setUint32(4, h1, true);
-  words.setUint32(8, h2, true);
-  words.setUint32(12, h3, true);
-  words.setUint32(16, h4, true);
-  return out;
+  msg.set(nonce, o); o += 32;
+  msg[o++] = 2;
+  msg[o++] = at(SYSTEM_PROGRAM);
+  msg[o++] = 3;
+  msg[o++] = at(nonceAccount);
+  msg[o++] = at(SYSVAR_RECENT);
+  msg[o++] = at(walletPub);
+  msg[o++] = 4;
+  msg[o++] = 4;
+  msg[o++] = 0;
+  msg[o++] = 0;
+  msg[o++] = 0;
+  msg[o++] = at(SYSTEM_PROGRAM);
+  msg[o++] = 2;
+  msg[o++] = at(walletPub);
+  msg[o++] = at(destPub);
+  msg[o++] = 12;
+  msg[o++] = 2;
+  msg[o++] = 0;
+  msg[o++] = 0;
+  msg[o++] = 0;
+  writeU64(msg, o, lamports);
+  return msg;
 }
 
-async function hash160(data) {
-  return ripemd160(await sha256(data));
+function buildSignedTx(payment, blob) {
+  if (!blob || blob.length !== 96) {
+    throw new Error("The codes do not match this payment.");
+  }
+  const pub = blob.slice(0, 32);
+  const sig = blob.slice(32, 96);
+  if (!bytesEq(pub, payment.walletPub)) throw new Error("That key is not this Game Boy.");
+  const msg = transferMessage(
+    pub, payment.dest, payment.nonceAccount, payment.nonce, payment.lamports
+  );
+  const wire = new Uint8Array(1 + 64 + msg.length);
+  wire[0] = 1;
+  wire.set(sig, 1);
+  wire.set(msg, 65);
+  return wire;
 }
 
 function parseSigPage(bytes) {
@@ -561,123 +435,15 @@ function assembleSigBlob(pages) {
   return blob;
 }
 
-function readSigs(blob) {
-  if (blob.length < 34) throw new Error("The codes are too short.");
-  const pub = blob.slice(0, 33);
-  if (pub[0] !== 2 && pub[0] !== 3) throw new Error("The key on the codes is not a compressed key.");
-  const sigs = [];
-  let p = 33;
-  while (p < blob.length) {
-    if (blob[p] !== 0x30 || p + 2 > blob.length) throw new Error("A signature on the codes is damaged.");
-    const body = blob[p + 1];
-    const total = 2 + body + 1;
-    if (body < 6 || total > 73 || p + total > blob.length || blob[p + total - 1] !== 0x01) {
-      throw new Error("A signature on the codes is damaged.");
-    }
-    sigs.push(blob.slice(p, p + total));
-    p += total;
-  }
-  if (sigs.length < 1 || sigs.length > MAX_INPUTS) {
-    throw new Error("The codes do not match this payment.");
-  }
-  return { pub, sigs };
-}
-
-function scriptFor(typeByte, hash160Bytes) {
-  if (typeByte === 1) {
-    const out = new Uint8Array(23);
-    out[0] = 0xa9;
-    out[1] = 0x14;
-    out.set(hash160Bytes, 2);
-    out[22] = 0x87;
-    return out;
-  }
-  if (typeByte !== 0) throw new Error("Destination type is unknown.");
-  return scriptP2pkh(hash160Bytes);
-}
-
-function pushScript(out, script) {
-  if (script.length >= 253) throw new Error("A script is too long.");
-  out.push(script.length);
-  for (const b of script) out.push(b);
-}
-
-function le32(out, n) {
-  const x = Number(n);
-  out.push(x & 255, (x >>> 8) & 255, (x >>> 16) & 255, (x >>> 24) & 255);
-}
-
-function le64(out, n) {
-  let x = BigInt(n);
-  for (let i = 0; i < 8; i++) {
-    out.push(Number(x & 0xffn));
-    x >>= 8n;
-  }
-}
-
-async function buildSignedTx(payment, blob) {
-  const { pub, sigs } = readSigs(blob);
-  if (sigs.length !== payment.inputs.length) {
-    throw new Error("The codes do not match this payment.");
-  }
-  const got = await hash160(pub);
-  const want = payment.walletHash160;
-  if (!want || got.length !== want.length) throw new Error("That key is not this Game Boy.");
-  for (let i = 0; i < got.length; i++) {
-    if (got[i] !== want[i]) throw new Error("That key is not this Game Boy.");
-  }
-  const hasChange = payment.change >= DUST;
-  const out = [];
-  le32(out, 1);
-  out.push(payment.inputs.length);
-  for (let i = 0; i < payment.inputs.length; i++) {
-    const txid = String(payment.inputs[i].txid).toLowerCase();
-    if (!/^[0-9a-f]{64}$/.test(txid)) throw new Error("A txid must be 64 hex characters.");
-    for (let b = 62; b >= 0; b -= 2) out.push(parseInt(txid.slice(b, b + 2), 16));
-    le32(out, payment.inputs[i].vout);
-    const sig = sigs[i];
-    const script = new Uint8Array(sig.length + pub.length + 2);
-    script[0] = sig.length;
-    script.set(sig, 1);
-    script[1 + sig.length] = pub.length;
-    script.set(pub, 2 + sig.length);
-    pushScript(out, script);
-    le32(out, 0xffffffff);
-  }
-  out.push(hasChange ? 2 : 1);
-  le64(out, payment.pay);
-  pushScript(out, scriptFor(payment.typeByte, payment.hash160));
-  if (hasChange) {
-    le64(out, payment.change);
-    pushScript(out, scriptP2pkh(payment.walletHash160));
-  }
-  le32(out, 0);
-  return out.map((b) => b.toString(16).padStart(2, "0")).join("");
-}
-
-function selectCoins(utxos, sendValue, feeRate, recipientIsP2sh) {
-  if (sendValue <= 0n) throw new Error("Amount must be more than 0.");
-  const sorted = utxos.filter((u) => u.spendable !== false).sort((a, b) => {
-    if (a.value === b.value) return 0;
-    return a.value > b.value ? -1 : 1;
-  });
-  const chosen = [];
-  let total = 0n;
-  for (const u of sorted) {
-    if (chosen.length >= MAX_INPUTS) break;
-    chosen.push(u);
-    total += u.value;
-    const plan = priceFixed(chosen.length, total, sendValue, feeRate, recipientIsP2sh);
-    if (plan) return { chosen, ...plan };
-  }
-  throw new Error("The first 4 coins do not cover this payment and fee.");
+function bytesToBase64(bytes) {
+  let s = "";
+  for (const b of bytes) s += String.fromCharCode(b);
+  return btoa(s);
 }
 
 return {
   ALPHABET,
-  KOINU,
-  DUST,
-  MAX_INPUTS,
+  LAMPORTS_PER_SOL,
   FORMAT_VERSION,
   HASH_CHARS,
   HASH_BYTES,
@@ -685,25 +451,19 @@ return {
   b58encode,
   b58decode,
   sha256d,
-  b58checkDecode,
   extractPayment,
   decodeAddress,
-  scriptP2pkh,
-  dogeToKoinu,
-  formatDoge,
-  feeRatePerByte,
-  estimateSize,
+  solToLamports,
+  formatSol,
   encodePayload,
   decodePayload,
   encodeString,
   stripTyped,
   decodeString,
-  ripemd160,
-  hash160,
+  transferMessage,
   parseSigPage,
   assembleSigBlob,
   buildSignedTx,
-  priceFixed,
-  selectCoins,
+  bytesToBase64,
 };
 })();

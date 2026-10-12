@@ -4,9 +4,7 @@
 #include <gbdk/console.h>
 
 #include "src/assets/offlineonly.h"
-#include "src/assets/bork.h"
-#include "src/assets/pepelogo.h"
-#include "src/assets/bellslogo.h"
+#include "src/assets/sollogo.h"
 
 #include "bitrot_rom.h"
 #include "draw.h"
@@ -256,43 +254,15 @@ void show_splash(
     }
 }
 
-void show_pepe_splash(void) BANKED {
+void show_sol_splash(void) BANKED {
     show_splash(
-        pepelogo_TILE_ORIGIN,
-        pepelogo_tiles,
-        pepelogo_TILE_COUNT,
-        pepelogo_map,
-        pepelogo_MAP_ATTRIBUTES_WIDTH,
-        pepelogo_MAP_ATTRIBUTES_HEIGHT,
-        pepelogo_palettes,
-        1,
-        1
-    );
-}
-
-void show_doge_splash(void) BANKED {
-    show_splash(
-        bork_TILE_ORIGIN,
-        bork_tiles,
-        bork_TILE_COUNT,
-        bork_map,
-        bork_MAP_ATTRIBUTES_WIDTH,
-        bork_MAP_ATTRIBUTES_HEIGHT,
-        bork_palettes,
-        1,
-        1
-    );
-}
-
-void show_bells_splash(void) BANKED {
-    show_splash(
-        bellslogo_TILE_ORIGIN,
-        bellslogo_tiles,
-        bellslogo_TILE_COUNT,
-        bellslogo_map,
-        bellslogo_MAP_ATTRIBUTES_WIDTH,
-        bellslogo_MAP_ATTRIBUTES_HEIGHT,
-        bellslogo_palettes,
+        sollogo_TILE_ORIGIN,
+        sollogo_tiles,
+        sollogo_TILE_COUNT,
+        sollogo_map,
+        sollogo_MAP_ATTRIBUTES_WIDTH,
+        sollogo_MAP_ATTRIBUTES_HEIGHT,
+        sollogo_palettes,
         1,
         1
     );

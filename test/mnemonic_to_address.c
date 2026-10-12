@@ -19,16 +19,13 @@ int main(int argc, char *argv[]) {
 
     uint8_t seed[64];
     uint8_t privkey[32];
-    uint8_t pubkey[33];
-    char    doge[35];
-    char    pepe[35];
-    char    bells[35];
+    uint8_t pubkey[32];
+    char    address[45];
     mnemonic_to_seed(mnemonic, seed);
 
-    seed_to_addresses(seed, doge, pepe, bells, privkey, pubkey); 
+    seed_to_addresses(seed, address, privkey, pubkey);
 
-    // Output only the address
-    printf("%s\n", doge);
+    printf("%s\n", address);
 
     return 0;
 }

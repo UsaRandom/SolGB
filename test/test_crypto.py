@@ -7,11 +7,12 @@ runs the C app, and compares results for statistical validation.
 import subprocess
 import sys
 import os
-from mnemonic import Mnemonic
-from bip32utils import BIP32Key
 import hashlib
+import hmac
+
 import base58
-import random
+from mnemonic import Mnemonic
+import nacl.signing
 
 def generate_random_mnemonic():
     """Generate a random 12-word BIP39 mnemonic"""
@@ -19,33 +20,32 @@ def generate_random_mnemonic():
     entropy = os.urandom(16)  # 128 bits
     return mnemo.to_mnemonic(entropy)
 
+# Phantom / Solflare default. All four steps are hardened.
+SOLANA_PATH = (0x8000002C, 0x800001F5, 0x80000000, 0x80000000)
+KNOWN_MNEMONIC = (
+    "abandon abandon abandon abandon abandon abandon abandon "
+    "abandon abandon abandon abandon about"
+)
+KNOWN_ADDRESS = "HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk"
+
+
+def slip10_ed25519(seed):
+    """SLIP-0010 master and m/44'/501'/0'/0'."""
+    digest = hmac.new(b"ed25519 seed", seed, hashlib.sha512).digest()
+    key, chain = digest[:32], digest[32:]
+    for index in SOLANA_PATH:
+        data = b"\x00" + key + index.to_bytes(4, "big")
+        digest = hmac.new(chain, data, hashlib.sha512).digest()
+        key, chain = digest[:32], digest[32:]
+    return key
+
+
 def python_mnemonic_to_address(mnemonic):
-    """Compute Dogecoin address using Python (reference implementation)"""
-    mnemo = Mnemonic("english")
-    seed = mnemo.to_seed(mnemonic, passphrase="")
-
-    # BIP32 derivation: m/44'/3'/0'/0/0
-    bip32_root = BIP32Key.fromEntropy(seed)
-    bip32_child = (bip32_root
-                   .ChildKey(44 + 0x80000000)
-                   .ChildKey(3 + 0x80000000)
-                   .ChildKey(0 + 0x80000000)
-                   .ChildKey(0)
-                   .ChildKey(0))
-
-    pubkey = bip32_child.PublicKey()
-
-    # P2PKH address generation
-    sha256_hash = hashlib.sha256(pubkey).digest()
-    ripemd160 = hashlib.new('ripemd160')
-    ripemd160.update(sha256_hash)
-    hash160 = ripemd160.digest()
-
-    versioned = b'\x1e' + hash160  # Dogecoin mainnet
-    checksum = hashlib.sha256(hashlib.sha256(versioned).digest()).digest()[:4]
-    address_bytes = versioned + checksum
-
-    return base58.b58encode(address_bytes).decode('utf-8')
+    """Solana address: base58 of the ed25519 public key. No checksum."""
+    seed = Mnemonic("english").to_seed(mnemonic, passphrase="")
+    key = slip10_ed25519(seed)
+    pub = nacl.signing.SigningKey(key).verify_key.encode()
+    return base58.b58encode(pub).decode("ascii")
 
 def c_mnemonic_to_address(mnemonic):
     """Run C app to compute address"""
@@ -78,6 +78,16 @@ def main():
 
     print(f"Running {num_tests} crypto validation tests...")
     print("=" * 50)
+
+    known_py = python_mnemonic_to_address(KNOWN_MNEMONIC)
+    known_c = c_mnemonic_to_address(KNOWN_MNEMONIC)
+    if known_py != KNOWN_ADDRESS or known_c != KNOWN_ADDRESS:
+        print("abandon address mismatch")
+        print(f"  python {known_py}")
+        print(f"  c      {known_c}")
+        print(f"  want   {KNOWN_ADDRESS}")
+        return 1
+    print(f"abandon address {KNOWN_ADDRESS}")
 
     for i in range(num_tests):
         # Generate random mnemonic

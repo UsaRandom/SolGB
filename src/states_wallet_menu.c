@@ -17,7 +17,6 @@
 extern AppState current_state;
 extern wallet current_wallet;
 extern uint8_t current_slot;
-extern uint8_t current_mode;
 
 void format_addr(const char* full_address, char* output, uint8_t output_size) {
     if (full_address == NULL || full_address[0] == '\0' || output_size < 10) {
@@ -47,7 +46,25 @@ void format_addr(const char* full_address, char* output, uint8_t output_size) {
     output[output_size - 1] = '\0';
 }
 
+/* The address QR uses background tiles 0-15. ! and . live there in the
+   font, so copy them out before the QR is drawn. */
+static void stash_glyph(uint8_t tile, uint8_t *buf) {
+    VBK_REG = 0;
+    get_bkg_data(tile, 1, buf);
+}
 
+static void draw_centered(uint8_t y, const char *s) {
+    uint8_t tiles[20];
+    uint8_t n = 0;
+    uint8_t i;
+    while (s[n] && n < 20u) n++;
+    for (i = 0; i < n; i++) {
+        if (s[i] == '!') tiles[i] = 250u;
+        else if (s[i] == '.') tiles[i] = 251u;
+        else tiles[i] = (uint8_t)(s[i] - 32);
+    }
+    if (n) set_bkg_tiles((uint8_t)((20u - n) / 2u), y, n, 1, tiles);
+}
 
 void handle_wallet_menu(void) BANKED {
     char menuTitle[32];
@@ -63,14 +80,14 @@ void handle_wallet_menu(void) BANKED {
     uint8_t choiceCount;
 
     if (hasMnemonic) {
-        walletMenu[0] = "Receive (QR)";
+        walletMenu[0] = "Receive";
         walletMenu[1] = "Sign Tx";
         walletMenu[2] = "Display Words";
         walletMenu[3] = "Delete Words";
         walletMenu[4] = "Clear Slot";
         choiceCount = 5u;
     } else {
-        walletMenu[0] = "Receive (QR)";
+        walletMenu[0] = "Receive";
         walletMenu[1] = "Sign Tx";
         walletMenu[2] = "Clear Slot";
         choiceCount = 3u;
@@ -96,7 +113,8 @@ void handle_wallet_menu(void) BANKED {
                 return;
             }
 
-            qr_generate(current_wallet.address, 34);
+            qr_generate(current_wallet.address,
+                        (uint16_t)strlen(current_wallet.address));
             qr_render();
 
             while(!joypad()) {stir_entropy();}
@@ -106,6 +124,34 @@ void handle_wallet_menu(void) BANKED {
     
 
     if (selection == 1) {
+        uint8_t bang[16];
+        uint8_t dot[16];
+
+        VBK_REG = 1; fill_bkg_rect(0, 0, 20, 3, 0); VBK_REG = 0;
+        cls();
+
+        if (!validate_checksum(current_wallet.address)) {
+            gotoxy(0, 8);
+            printf("   Corrupted Addr\n");
+            while (!joypad()) { vsync(); }
+            current_state = STATE_WALLET_MENU;
+            return;
+        }
+
+        stash_glyph(1, bang);
+        stash_glyph(14, dot);
+        qr_generate(current_wallet.address,
+                    (uint16_t)strlen(current_wallet.address));
+        qr_render();
+        VBK_REG = 0;
+        set_bkg_data(250, 1, bang);
+        set_bkg_data(251, 1, dot);
+        draw_centered(0, "Scan to Begin!");
+        draw_centered(17, "signgb.app");
+
+        while (!joypad()) { stir_entropy(); }
+        while (joypad()) { stir_entropy(); }
+        init_draw();
         sign_tx_input();
         return;
     }
@@ -137,7 +183,7 @@ void handle_wallet_menu(void) BANKED {
         int8_t confirm = show_menu("Delete Words?", confirmOptions, 2u);
         if (confirm == 1) {
             delete_mnemonic(current_wallet.slotNum);
-            get_wallet(current_wallet.slotNum, current_mode, &current_wallet);
+            get_wallet(current_wallet.slotNum, &current_wallet);
         }
 
     } else if ((choiceCount == 5 && selection == 4) ||

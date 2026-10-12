@@ -23,6 +23,9 @@ static union {
         SHA512_CTX ctx_outer_buf;
         uint8_t salt_block_buf[132];
     } kdf;
+    /* ed25519 point state and the mod L column. 8-byte alignment.
+       176 * 8 = 1408. The point block is smaller than that. */
+    int64_t ed_words[176];
 } kdf_mem;
 
 #define u            kdf_mem.kdf.u_buf

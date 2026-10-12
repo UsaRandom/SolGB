@@ -5,10 +5,7 @@
 #include "hd_wallet.h"
 #include "pbkdf2.h"
 #include "sha512.h"
-#include "ecdsa.h"
-
-/* Banked field square already in secp256k1.c. One multiply, no scalar loop. */
-void test_mul(uint8_t *out) BANKED;
+#include "ed25519.h"
 
 /*
  * Mailbox the harness reads by symbol.
@@ -56,11 +53,18 @@ static void run_sha512(void) {
     finish(1, digest, 64);
 }
 
-static void run_mul(void) {
-    static uint8_t out[32];
+/* RFC 8032 test 1. One public key, no PBKDF2. */
+static void run_ed25519(void) {
+    static const uint8_t seed[32] = {
+        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
+        0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+        0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19,
+        0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60
+    };
+    static uint8_t pub[32];
 
-    test_mul(out);
-    finish(2, out, 32);
+    ed25519_public(seed, pub);
+    finish(2, pub, 32);
 }
 
 static void run_pbkdf2(uint32_t iterations, uint8_t test) {
@@ -76,29 +80,23 @@ static void run_pbkdf2(uint32_t iterations, uint8_t test) {
 static void run_address(void) {
     static uint8_t seed[64];
     static uint8_t privkey[32];
-    static uint8_t pubkey[33];
-    static char doge[35];
-    static char pepe[35];
-    static char bells[35];
-    static uint8_t packed[202];
+    static uint8_t pubkey[32];
+    static char address[45];
+    static uint8_t packed[141];
     static const uint8_t salt[8] = {
         'm', 'n', 'e', 'm', 'o', 'n', 'i', 'c'
     };
 
-    memset(doge, 0, 35);
-    memset(pepe, 0, 35);
-    memset(bells, 0, 35);
+    memset(address, 0, 45);
     memset(packed, 0, sizeof packed);
 
     pbkdf2_hmac_sha512(seed, (const uint8_t *)MNEMONIC, 93, salt, 8, 2048);
-    seed_to_addresses(seed, doge, pepe, bells, privkey, pubkey);
+    seed_to_addresses(seed, address, privkey, pubkey);
 
-    memcpy(packed, doge, 35);
-    memcpy(packed + 35, pepe, 35);
-    memcpy(packed + 70, bells, 35);
-    memcpy(packed + 105, seed, 64);
-    memcpy(packed + 169, pubkey, 33);
-    finish(4, packed, 202);
+    memcpy(packed, address, 45);
+    memcpy(packed + 45, seed, 64);
+    memcpy(packed + 109, pubkey, 32);
+    finish(4, packed, 141);
 }
 
 void main(void) {
@@ -123,39 +121,11 @@ void main(void) {
     if (id == 1) {
         run_sha512();
     } else if (id == 2) {
-        run_mul();
+        run_ed25519();
     } else if (id == 3) {
         run_pbkdf2(1, 3);
     } else if (id == 4) {
         run_address();
-    } else if (id == 5) {
-        static uint8_t out[4];
-        ecdsa_bench_sizes(out);
-        finish(5, out, 4);
-    } else if (id == 6) {
-        static uint8_t out[32];
-        ecdsa_bench_rfc(out);
-        finish(6, out, 32);
-    } else if (id == 7) {
-        static uint8_t out[32];
-        ecdsa_bench_inv(out);
-        finish(7, out, 32);
-    } else if (id == 8) {
-        static uint8_t out[32];
-        ecdsa_bench_mul(out);
-        finish(8, out, 32);
-    } else if (id == 9) {
-        static uint8_t out[32];
-        ecdsa_bench_hash(out);
-        finish(9, out, 32);
-    } else if (id == 10) {
-        static uint8_t out[106];
-        uint8_t n;
-        memset(out, 0, sizeof out);
-        ecdsa_bench_sign(out);
-        n = out[32];
-        if (n > 73u) n = 73u;
-        finish(10, out, (uint16_t)(33u + n));
     } else {
         finish(id, 0, 0);
     }

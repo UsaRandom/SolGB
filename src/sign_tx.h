@@ -4,16 +4,16 @@
 #include <stdint.h>
 #include <gb/gb.h>
 
-/* Decrypt the slot key, sighash each input, and sign it.
-   Returns 0 if the slot or the signature is unusable.
-   The key is wiped before return. On success the scratch just past
-   SignMem holds the export: 33-byte compressed pubkey, then each
-   signature in input order. A signature is DER and already ends in
-   the SIGHASH_ALL byte. *blob_len is that many bytes. The caller
-   wipes the scratch when it is done showing them. */
-uint8_t sign_payment(uint8_t slot, uint8_t n_in, const uint8_t *txid,
-                     const uint16_t *vout, uint8_t has_change, uint8_t dest_type,
-                     const uint8_t pay[8], const uint8_t change[8],
-                     const uint8_t dest[20], uint16_t *blob_len) BANKED;
+/* Decrypt the slot key and sign one durable-nonce Solana transfer.
+   dest is the 32-byte recipient. lamports is unsigned little-endian.
+   nonce_acc is the nonce account. nonce is its stored value, used as
+   the recent-blockhash field. Returns 0 if the slot, the destination,
+   the amount, the nonce, or the signature is unusable.
+   The key is wiped before return. On success the start of the scratch
+   holds 32-byte pubkey then 64-byte signature. *blob_len is 96.
+   The caller wipes the scratch when it is done showing the codes. */
+uint8_t sign_payment(uint8_t slot, const uint8_t dest[32],
+                     const uint8_t lamports[8], const uint8_t nonce_acc[32],
+                     const uint8_t nonce[32], uint16_t *blob_len) BANKED;
 
 #endif

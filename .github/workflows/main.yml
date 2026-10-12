@@ -44,34 +44,13 @@ jobs:
           echo "══════════════════════════════════════"
           echo "✅ ROM BUILD COMPLETE — SHA256 HASHES:"
           echo "══════════════════════════════════════"
-          echo "DogeGB.gb:"
-          sha256sum build/DogeGB.gb
-          echo ""
-          echo "PepeGB.gb:"
-          sha256sum build/PepeGB.gb
-          echo ""
-          echo "BellsGB.gb:"
-          sha256sum build/BellsGB.gb
+          echo "SolGB.gb:"
+          sha256sum build/SolGB.gb
           echo "══════════════════════════════════════"
-          echo "Copy these three hashes for verification."
 
-      - name: Upload DogeGB ROM (individual)
+      - name: Upload SolGB ROM
         uses: actions/upload-artifact@v4
         with:
-          name: DogeGB.gb
-          path: build/DogeGB.gb
-          retention-days: 30
-
-      - name: Upload PepeGB ROM (individual)
-        uses: actions/upload-artifact@v4
-        with:
-          name: PepeGB.gb
-          path: build/PepeGB.gb
-          retention-days: 30
-
-      - name: Upload BellsGB ROM (individual)
-        uses: actions/upload-artifact@v4
-        with:
-          name: BellsGB.gb
-          path: build/BellsGB.gb
+          name: SolGB.gb
+          path: build/SolGB.gb
           retention-days: 30

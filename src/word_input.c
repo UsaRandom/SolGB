@@ -12,7 +12,6 @@
 #include "src/assets/keyboard_lightgrey.h"
 #include "src/crypto/bip39_wordlist.h"
 #include "word_input.h"
-#include "wallet.h"
 
 #pragma bank 5
 
@@ -23,7 +22,6 @@
 #define MESSAGE_Y 7
 
 uint8_t attr_map[120];
-extern uint8_t current_mode;
 
 static uint16_t get_map_index(uint8_t mx, uint8_t my) {
     return (uint16_t)my * 20u + mx;
@@ -225,20 +223,6 @@ char* get_word_from_user(int wordNumber, const char* start) BANKED {
     draw_text(1, title, (20 - title_len) / 2);
 
     uint8_t sel = 12;
-
-    switch(current_mode){
-        case DOGEGB:
-            sel = 12;
-            break;
-        case PEPEGB:
-            sel = 9;
-            break;
-        case BELLSGB:
-            sel = 23;
-            break;
-        default:
-            break;
-    }
 
     uint8_t prev_j = 0;
     int8_t prev_vertical_sel = -1;

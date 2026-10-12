@@ -7,9 +7,9 @@ so it always triggers the integrity check failure when testing bitrot protection
 The used range is detected the same way as in patch_rom_crc32.py.
 
 Usage:
-    python3 corrupt_rom.py build/DogeGB.gb
-    → creates build/DogeGB_corrupted.gb
-    python3 corrupt_rom.py build/DogeGB.gb my_test.rom
+    python3 corrupt_rom.py build/SolGB.gb
+    → creates build/SolGB_corrupted.gb
+    python3 corrupt_rom.py build/SolGB.gb my_test.rom
     → creates my_test.rom with the flip
 """
 

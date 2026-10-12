@@ -20,18 +20,13 @@ CRYPTO := \
 	$(ROOT)/src/crypto/sha512_constants.c \
 	$(ROOT)/src/crypto/hmac.c \
 	$(ROOT)/src/crypto/hd_wallet.c \
-	$(ROOT)/src/crypto/sha256.c \
-	$(ROOT)/src/crypto/secp256k1.c \
-	$(ROOT)/src/crypto/bn_inv.c \
-	$(ROOT)/src/crypto/ripemd160.c \
+	$(ROOT)/src/crypto/ed25519.c \
+	$(ROOT)/src/crypto/ed_base.c \
+	$(ROOT)/src/crypto/ed_base_lo.s \
+	$(ROOT)/src/crypto/ed_base_hi.s \
 	$(ROOT)/src/crypto/bn_mul.s \
 	$(ROOT)/src/crypto/mul_tables.s \
-	$(ROOT)/src/crypto/mul977_tab.s \
-	$(ROOT)/src/crypto/gpow_table.c \
-	$(ROOT)/src/crypto/gpow_load.c \
-	$(ROOT)/src/crypto/comb_load.c \
-	$(ROOT)/src/crypto/comb_mul.c \
-	$(ROOT)/src/crypto/ecdsa.c
+	$(ROOT)/src/crypto/b58.c
 
 OUTDIR := build
 ROM := $(OUTDIR)/crypto_test.gb
@@ -43,7 +38,7 @@ all: $(ROM)
 $(ROM): main.c progress_stub.c $(CRYPTO)
 	mkdir -p $(OUTDIR)
 	$(LCC) $(CFLAGS) -o $@ main.c progress_stub.c $(CRYPTO)
-	python3 $(ROOT)/tools/patch_comb.py $@
+	python3 $(ROOT)/tools/patch_bitrot.py $@
 
 clean:
 	rm -rf $(OUTDIR)

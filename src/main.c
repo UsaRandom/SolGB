@@ -18,7 +18,6 @@
 
 #include "src/crypto/mnemonic.h"
 #include "src/crypto/hd_wallet.h"
-#include "src/crypto/secp256k1.h"
 #include "src/crypto/bip39_wordlist.h"
 
 #include "word_input.h"
@@ -29,9 +28,9 @@
 
 unsigned char seed[64];
 unsigned char privkey[32];
-unsigned char pubkey[33];
+unsigned char pubkey[PUB_KEY_LEN];
 
-char address[35];
+char address[ADDRESS_MAX_LEN + 1];
 
 AppState current_state;
 uint8_t current_slot;
@@ -48,12 +47,6 @@ uint16_t pool_ptr = 0;
 uint8_t pin_set;
 uint8_t pin_hash[32];
 uint8_t pin_double_hash[32];
-
-#ifndef DEFAULT_MODE
-#define DEFAULT_MODE 0
-#endif
-
-uint8_t current_mode = DEFAULT_MODE;
 
 char menu_strings[16][16];
 const char* menu_options[16];
@@ -111,20 +104,7 @@ void main(void)
                 }
 
                 show_offline_warning();
-
-                switch(current_mode) {
-                    case DOGEGB:
-                        show_doge_splash();
-                        break;
-                    case PEPEGB:
-                        show_pepe_splash();
-                        break;
-                    case BELLSGB:
-                        show_bells_splash();
-                        break;
-                    default:
-                    break;
-                }
+                show_sol_splash();
                 init_draw();
                 SHOW_BKG;
                 DISPLAY_ON;

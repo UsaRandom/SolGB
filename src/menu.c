@@ -5,9 +5,7 @@
 #include <string.h>
 #include <gbdk/console.h>
 #include <gbdk/font.h>
-#include "src/assets/dogecoin.h" 
-#include "src/assets/pepecoin.h" 
-#include "src/assets/bellscoin.h" 
+#include "src/assets/solcoin.h"
 #include "src/assets/chksum.h"
 #include "bip39_wordlist.h"
 #include <draw.h>
@@ -36,9 +34,6 @@ uint8_t anim_counter = 0;
 static const char* create_opt = "[Create Wallet]";
 static uint8_t checksum_valid = 0;
 
-extern const uint8_t current_mode;
-
-
 #define CURSOR_SPRITE 0
 #define CURSOR_Y_BASE 28
 #define CURSOR_Y_STEP 8
@@ -55,23 +50,8 @@ uint8_t menu_mode = MENU_DEFAULT;
 
 void init_cursor_sprite(void) BANKED {
 
-    switch(current_mode)
-    {
-        case DOGEGB:
-            set_sprite_data(0, dogecoin_TILE_COUNT, dogecoin_tiles);
-            set_sprite_palette(0, dogecoin_PALETTE_COUNT * dogecoin_COLORS_PER_PALETTE, dogecoin_palettes);
-            break;
-        case PEPEGB:
-            set_sprite_data(0, pepecoin_TILE_COUNT, pepecoin_tiles);
-            set_sprite_palette(0, pepecoin_PALETTE_COUNT * pepecoin_COLORS_PER_PALETTE, pepecoin_palettes);
-            break;
-        case BELLSGB:
-            set_sprite_data(0, bellscoin_TILE_COUNT, bellscoin_tiles);
-            set_sprite_palette(0, bellscoin_PALETTE_COUNT * bellscoin_COLORS_PER_PALETTE, bellscoin_palettes);
-            break;
-        default:
-            break;
-    }
+    set_sprite_data(0, solcoin_TILE_COUNT, solcoin_tiles);
+    set_sprite_palette(0, solcoin_PALETTE_COUNT * solcoin_COLORS_PER_PALETTE, solcoin_palettes);
 
 
     
@@ -173,9 +153,6 @@ void wait_no_buttons(void) {
     }
 }
 
-#define KONAMI_LENGTH 11
-const uint8_t konami_code[] = { J_UP, J_UP, J_DOWN, J_DOWN, J_LEFT, J_RIGHT, J_LEFT, J_RIGHT, J_B, J_A, J_START };
-
 int8_t menu(const char* title, const char** options, uint8_t num_options) BANKED {
 
     vsync();
@@ -216,21 +193,9 @@ int8_t menu(const char* title, const char** options, uint8_t num_options) BANKED
     
     while (joypad()) stir_entropy();
     update_cursor_position();
-    
-    int8_t konami_index = 0;
 
     while (1) {
         uint8_t keys = joypad();
-
-        if (keys & konami_code[konami_index]) {
-            wait_no_buttons();
-            konami_index++;
-            if (konami_index == KONAMI_LENGTH) return -2;
-        }
-        else if (keys && !(konami_index == 2 && (keys & J_UP))){
-            konami_index = 0;
-        }
-        
 
         if (keys & J_UP) {
             target_pos = prev_valid_option(target_pos, options, num_options);
@@ -240,12 +205,12 @@ int8_t menu(const char* title, const char** options, uint8_t num_options) BANKED
             target_pos = next_valid_option(target_pos, options, num_options);
             wait_no_buttons();
         }
-        else if (keys & (J_A | J_START) && konami_index == 0) {
+        else if (keys & (J_A | J_START)) {
             wait_no_buttons();
             hide_cursor_sprite();
             return target_pos;
         }
-        else if (keys & J_B && konami_index == 0) {
+        else if (keys & J_B) {
             wait_no_buttons();
             hide_cursor_sprite();
             return -1;

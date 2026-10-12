@@ -7,7 +7,6 @@
 #include <progress.h>
 #include "src/crypto/mnemonic.h"
 #include "src/crypto/hd_wallet.h"
-#include "src/crypto/secp256k1.h"
 #include "src/crypto/bip39_wordlist.h"
 #include "states.h"
 #include "word_input.h"

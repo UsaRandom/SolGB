@@ -301,3 +301,9 @@ body.scanning .finder { flex: 1 1 auto; min-height: 12rem; }
   body.scanning #app { max-width: 40rem; }
   body.scanning #screen { flex: 1; }
 }
+
+/* No live camera: hide the aiming frame and show a plain placeholder. */
+.finder.cam-off .frame { display: none; }
+.finder.cam-off {
+  background: repeating-conic-gradient(#2a241c 0 25%, #16120c 0 50%) 0 0 / 8px 8px;
+}

@@ -8,7 +8,6 @@
 #include <progress.h>
 #include "src/crypto/mnemonic.h"
 #include "src/crypto/hd_wallet.h"
-#include "src/crypto/secp256k1.h"
 #include "src/crypto/bip39_wordlist.h"
 #include "src/assets/nophotos.h"
 #include "states.h"
@@ -28,11 +27,9 @@ extern char words[12][9];
 extern char temp_buffer[32];
 extern unsigned char seed[64];
 extern unsigned char privkey[32];
-extern unsigned char pubkey[33];
-extern char address[35];
+extern unsigned char pubkey[PUB_KEY_LEN];
+extern char address[ADDRESS_MAX_LEN + 1];
 extern uint8_t test_streak;
-
-extern uint8_t current_mode;
 
 extern uint8_t current_slot;
 extern wallet current_wallet;
@@ -128,14 +125,12 @@ void handle_generate_address(void) BANKED {
 
     uint8_t local_seed[64];
     uint8_t local_privkey[32];
-    uint8_t local_pubkey[33];
-    char    local_address[35];// = "DNQAyz6kPHUedoxpaUdHeXWPhgLa8bAFX4";
-    char    local_pepeaddress[35];// = "PqBraorEqyXRu5b5DPHaFnar4o36fuBBVY";
-    char    local_bellsaddress[35];// = "BMiA4ScJqPAGYeGPTNxhDu9TZA3rcdG7wg";
+    uint8_t local_pubkey[PUB_KEY_LEN];
+    char    local_address[ADDRESS_MAX_LEN + 1];
 
     /* Once per cartridge: known wallet, then this mnemonic. */
     if (!run_known_addr_check(local_seed, local_privkey, local_pubkey,
-                              local_address, local_pepeaddress, local_bellsaddress)) {
+                              local_address)) {
         hang_failed();
     }
 
@@ -145,9 +140,9 @@ void handle_generate_address(void) BANKED {
     __asm__("di");
     #endif
 
-    seed_to_addresses(local_seed, local_address, local_pepeaddress, local_bellsaddress, local_privkey, local_pubkey);
+    seed_to_addresses(local_seed, local_address, local_privkey, local_pubkey);
 
-    if(!validate_checksum(local_address) || !validate_checksum(local_pepeaddress) || !validate_checksum(local_bellsaddress)) {
+    if(!validate_checksum(local_address)) {
         hang_failed();
     }
 
@@ -155,25 +150,13 @@ void handle_generate_address(void) BANKED {
     __asm__("ei");
     #endif
 
-    switch(current_mode){
-        case DOGEGB:
-            strcpy(address, local_address);
-        break;
-        case PEPEGB:
-            strcpy(address, local_pepeaddress);
-            break;
-        case BELLSGB:
-            strcpy(address, local_bellsaddress);
-        break;
-        default:
-        break;
-    }
+    strcpy(address, local_address);
 
     #ifndef TEST_MODE
     __asm__("di");
     #endif
 
-    save_wallet(current_slot, local_address, local_pepeaddress, local_bellsaddress, mnemonic_str, local_privkey, local_pubkey);
+    save_wallet(current_slot, local_address, mnemonic_str, local_privkey, local_pubkey);
 
     #ifndef TEST_MODE
     __asm__("ei");
@@ -184,7 +167,7 @@ void handle_generate_address(void) BANKED {
     #endif
     
 
-    get_wallet(current_slot, current_mode, &current_wallet);
+    get_wallet(current_slot, &current_wallet);
 
     #ifndef TEST_MODE
     __asm__("ei");

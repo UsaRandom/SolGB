@@ -1,18 +1,26 @@
-if (!globalThis.DogeCodec) throw new Error("This page did not start.");
+if (!globalThis.SolCodec) throw new Error("This page did not start.");
 const {
   assembleSigBlob,
+  b58encode,
   buildSignedTx,
+  bytesToBase64,
   decodeAddress,
-  dogeToKoinu,
   encodeString,
   extractPayment,
-  feeRatePerByte,
-  formatDoge,
+  formatSol,
   parseSigPage,
-  priceFixed,
-  scriptP2pkh,
-  selectCoins,
-} = globalThis.DogeCodec;
+  solToLamports,
+} = globalThis.SolCodec;
+
+function savedText(key) {
+  try { return localStorage.getItem(key) || ""; }
+  catch { return ""; }
+}
+
+function storeText(key, value) {
+  try { localStorage.setItem(key, value); }
+  catch { /* a private window has no storage */ }
+}
 
 const screen = document.getElementById("screen");
 const backBtn = document.getElementById("back");
@@ -26,11 +34,10 @@ const state = {
   wallet: null,
   dest: null,
   destText: "",
+  nonceText: savedText("solgb.nonce"),
   amountText: "",
   amountFromCode: false,
-  feeText: "1.0",
-  coins: [],
-  nextId: 1,
+  balance: null,
   lookup: "idle",
   lookupGen: 0,
   plan: null,
@@ -39,8 +46,8 @@ const state = {
   draft: "",
   sigParts: [],
   sigCount: 0,
-  txHex: "",
-  txHash: "",
+  txB64: "",
+  txSig: "",
   sendError: "",
 };
 
@@ -48,6 +55,7 @@ let scanGen = 0;
 let sendGen = 0;
 let stream = null;
 let cameraAsked = false;
+let idleCam = false;
 
 function h(tag, props, children) {
   const node = document.createElement(tag);
@@ -64,8 +72,8 @@ function h(tag, props, children) {
   return node;
 }
 
-function friendlyDoge(koinu) {
-  const raw = formatDoge(koinu);
+function friendlySol(lamports) {
+  const raw = formatSol(lamports);
   const neg = raw.startsWith("-");
   const body = neg ? raw.slice(1) : raw;
   const [whole, frac] = body.split(".");
@@ -75,18 +83,6 @@ function friendlyDoge(koinu) {
 
 function spaced(text) {
   return (text.match(/.{1,4}/g) || [text]).join(" ");
-}
-
-function spendable() {
-  return state.coins.filter((c) => c.spendable);
-}
-
-function totalSpendable() {
-  return spendable().reduce((n, c) => n + c.value, 0n);
-}
-
-function checkedCoins() {
-  return state.coins.filter((c) => c.checked && c.spendable);
 }
 
 function stepIndex() {
@@ -117,10 +113,13 @@ function go(step) {
 function rememberPay() {
   const dest = document.getElementById("dest");
   const amount = document.getElementById("amount");
-  const fee = document.getElementById("fee");
+  const nonce = document.getElementById("nonce");
   if (dest) state.destText = dest.value;
   if (amount) state.amountText = amount.value;
-  if (fee) state.feeText = fee.value;
+  if (nonce) {
+    state.nonceText = nonce.value;
+    storeText("solgb.nonce", nonce.value);
+  }
 }
 
 function hexEq(a, b) {
@@ -130,10 +129,7 @@ function hexEq(a, b) {
 }
 
 function parseJsonBig(text) {
-  const safe = text.replace(
-    /"(value|balance|total_received|total_sent|final_balance|unconfirmed_balance)"\s*:\s*(-?\d+)/g,
-    '"$1":"$2"'
-  );
+  const safe = text.replace(/([:[,]\s*)(-?\d{15,})(?=\s*[,}\]])/g, '$1"$2"');
   return JSON.parse(safe);
 }
 
@@ -144,77 +140,32 @@ function asBig(v) {
   throw new Error("A coin value was too large to read.");
 }
 
-async function fetchBlockcypher(address) {
-  const url = "https://api.blockcypher.com/v1/doge/main/addrs/" +
-    encodeURIComponent(address) + "?unspentOnly=true&includeScript=true&limit=200";
-  const res = await fetch(url);
+async function rpc(method, params) {
+  const res = await fetch("https://api.mainnet-beta.solana.com", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
+  });
   const text = await res.text();
   if (!res.ok) throw new Error("lookup failed");
   const data = parseJsonBig(text);
-  const expected = scriptP2pkh(state.wallet.hash160);
-  const coins = [];
-  const take = (ref, confirmed) => {
-    if (!ref || ref.spent) return;
-    if (ref.tx_input_n !== undefined && ref.tx_input_n !== -1) return;
-    const scriptHex = (ref.script || "").toLowerCase();
-    let ok = true;
-    if (scriptHex) {
-      const got = new Uint8Array(scriptHex.match(/../g).map((b) => parseInt(b, 16)));
-      ok = hexEq(got, expected);
-    }
-    coins.push({
-      id: state.nextId++,
-      txid: String(ref.tx_hash).toLowerCase(),
-      vout: ref.tx_output_n,
-      value: asBig(ref.value),
-      confirmations: confirmed ? Number(ref.confirmations || 0) : 0,
-      spendable: ok,
-      checked: false,
-    });
-  };
-  for (const ref of data.txrefs || []) take(ref, true);
-  for (const ref of data.unconfirmed_txrefs || []) take(ref, false);
-  return coins;
-}
-
-async function fetchChainz(address) {
-  const url = "https://chainz.cryptoid.info/doge/api.dws?q=unspent&active=" +
-    encodeURIComponent(address);
-  const res = await fetch(url);
-  const text = await res.text();
-  if (!res.ok) throw new Error("lookup failed");
-  const data = parseJsonBig(text);
-  if (data && data.error) throw new Error("lookup failed");
-  const list = Array.isArray(data) ? data : (data.unspent_outputs || []);
-  return list.map((u) => ({
-    id: state.nextId++,
-    txid: String(u.tx_hash || u.txid || u.tx_hash_big_endian).toLowerCase(),
-    vout: Number(u.tx_output_n ?? u.vout ?? u.n),
-    value: asBig(u.value),
-    confirmations: Number(u.confirmations || 0),
-    spendable: true,
-    checked: false,
-  }));
+  if (data.error) throw new Error(data.error.message || "lookup failed");
+  return data.result;
 }
 
 async function lookup() {
   const gen = ++state.lookupGen;
   state.lookup = "loading";
-  state.coins = [];
+  state.balance = null;
   if (state.step === "found" || state.step === "pay") render();
-  let coins = null;
   try {
-    coins = await fetchBlockcypher(state.wallet.text);
-  } catch { /* try the next lookup */ }
-  if (!coins) {
-    try { coins = await fetchChainz(state.wallet.text); }
-    catch { /* leave coins empty */ }
-  }
-  if (gen !== state.lookupGen) return;
-  if (!coins) state.lookup = "error";
-  else {
-    state.coins = coins;
+    const got = await rpc("getBalance", [state.wallet.text]);
+    if (gen !== state.lookupGen) return;
+    state.balance = asBig(got.value);
     state.lookup = "done";
+  } catch {
+    if (gen !== state.lookupGen) return;
+    state.lookup = "error";
   }
   if (state.step === "found" || state.step === "pay") {
     rememberPay();
@@ -224,11 +175,11 @@ async function lookup() {
 
 async function readCode(raw, typed) {
   if (!String(raw).trim()) {
-    return { error: typed ? "Type the whole address." : "That code is not a Dogecoin address." };
+    return { error: typed ? "Type the whole address." : "That code is not a Solana address." };
   }
   let parsed;
   try { parsed = extractPayment(raw); }
-  catch { return { error: typed ? "That address does not look right." : "That code is not a Dogecoin address." }; }
+  catch { return { error: typed ? "That address does not look right." : "That code is not a Solana address." }; }
   try {
     const decoded = await decodeAddress(parsed.address);
     return { decoded, amount: parsed.amount };
@@ -244,9 +195,8 @@ async function readCode(raw, typed) {
 async function useWallet(raw, typed) {
   const found = await readCode(raw, typed);
   if (found.error) return found.error;
-  if (found.decoded.kind !== "p2pkh") return "The Game Boy address should start with D.";
   state.wallet = found.decoded;
-  state.coins = [];
+  state.balance = null;
   state.lookup = "loading";
   state.step = "found";
   state.formError = "";
@@ -262,7 +212,7 @@ async function useDest(raw) {
   state.destText = found.decoded.text;
   if (found.amount && !state.amountText) {
     try {
-      dogeToKoinu(found.amount);
+      solToLamports(found.amount);
       state.amountText = found.amount;
       state.amountFromCode = true;
     } catch { /* ignore a bad amount on the code */ }
@@ -308,7 +258,7 @@ function walletForm() {
     autocomplete: "off",
     spellcheck: "false",
     autocapitalize: "off",
-    placeholder: "Starts with D",
+    placeholder: "Solana address",
   });
   input.addEventListener("input", () => { state.draft = input.value; });
   return h("form", { class: "stack", onsubmit: async (e) => {
@@ -329,7 +279,7 @@ function walletForm() {
 function renderHome() {
   if (wide()) {
     screen.append(
-      h("h1", {}, ["Send Dogecoin"]),
+      h("h1", {}, ["Send SOL"]),
       h("p", { class: "lead" }, ["On your Game Boy, open the address code."]),
       h("p", { class: "lead" }, ["Type it here. Your words and your key stay on the Game Boy."]),
       walletForm(),
@@ -340,7 +290,7 @@ function renderHome() {
     return;
   }
   screen.append(
-    h("h1", {}, ["Send Dogecoin"]),
+    h("h1", {}, ["Send SOL"]),
     h("p", { class: "lead" }, ["On your Game Boy, open the address code."]),
     h("p", { class: "lead" }, ["Then scan it with this phone. Your words and your key stay on the Game Boy."]),
     h("div", { class: "actions" }, [
@@ -360,68 +310,26 @@ function renderTypeWallet() {
 }
 
 function renderFound() {
-  const total = totalSpendable();
   const bits = [
     h("h1", {}, ["Your Game Boy"]),
     h("p", { class: "addr" }, [spaced(state.wallet.text)]),
-    h("p", { class: "lead" }, ["Anything left over comes back to this wallet."]),
   ];
   if (state.lookup === "loading") {
-    bits.push(h("p", { class: "money" }, ["Looking up your Dogecoin…"]));
+    bits.push(h("p", { class: "money" }, ["Looking up your balance…"]));
   } else if (state.lookup === "error") {
     bits.push(h("p", { class: "bad" }, ["The lookup did not answer. Check your connection."]));
     bits.push(primary("Try again", () => lookup()));
-    bits.push(addCoinForm());
-  } else if (total === 0n) {
-    bits.push(h("p", { class: "money" }, ["There is no Dogecoin here yet."]));
+  } else if (state.balance === 0n) {
+    bits.push(h("p", { class: "money" }, ["There is no SOL here yet."]));
     bits.push(h("p", { class: "lead" }, ["Receive some on the Game Boy, then scan again."]));
     bits.push(primary("Scan a different wallet", () => startScan("wallet")));
-    bits.push(addCoinForm());
   } else {
-    bits.push(h("p", { class: "money" }, ["You have " + friendlyDoge(total) + " DOGE."]));
+    bits.push(h("p", { class: "money" }, ["You have " + friendlySol(state.balance) + " SOL."]));
     bits.push(h("div", { class: "actions" }, [
       primary("Continue", () => go("pay")),
     ]));
   }
   screen.append(...bits);
-}
-
-function addCoinForm() {
-  const txid = h("input", { id: "hand-txid", type: "text", autocomplete: "off", spellcheck: "false", autocapitalize: "off" });
-  const vout = h("input", { id: "hand-vout", type: "text", inputmode: "numeric", autocomplete: "off" });
-  const amount = h("input", { id: "hand-amount", type: "text", inputmode: "decimal", autocomplete: "off" });
-  const err = h("p", { class: "bad", id: "hand-error" }, []);
-  const form = h("form", { class: "stack", onsubmit: (e) => {
-    e.preventDefault();
-    err.textContent = "";
-    try {
-      const id = txid.value.trim().toLowerCase();
-      if (!/^[0-9a-f]{64}$/.test(id)) throw new Error("The transaction code is 64 letters and numbers.");
-      const n = Number(vout.value);
-      if (!Number.isInteger(n) || n < 0 || n > 65535) throw new Error("The output number looks wrong.");
-      const value = dogeToKoinu(amount.value);
-      if (value <= 0n) throw new Error("Enter how much that coin is.");
-      if (state.coins.some((c) => c.txid === id && c.vout === n)) throw new Error("That coin is already listed.");
-      state.coins.push({
-        id: state.nextId++, txid: id, vout: n, value,
-        confirmations: 1, spendable: true, checked: false,
-      });
-      if (state.lookup !== "done") state.lookup = "done";
-      render();
-    } catch (problem) {
-      err.textContent = problem.message;
-    }
-  } }, [
-    h("label", {}, ["Transaction code", txid]),
-    h("label", {}, ["Output number", vout]),
-    h("label", {}, ["How much is that coin?", amount]),
-    err,
-    h("button", { class: "secondary", type: "submit" }, ["Add this coin"]),
-  ]);
-  return h("details", {}, [
-    h("summary", {}, ["The lookup missed a coin"]),
-    form,
-  ]);
 }
 
 function renderPay() {
@@ -434,17 +342,18 @@ function renderPay() {
     id: "amount", type: "text", inputmode: "decimal", value: state.amountText,
     autocomplete: "off",
   });
-  const fee = h("input", {
-    id: "fee", type: "text", inputmode: "decimal", value: state.feeText, autocomplete: "off",
+  const nonce = h("input", {
+    id: "nonce", type: "text", value: state.nonceText,
+    autocomplete: "off", spellcheck: "false", autocapitalize: "off",
+    placeholder: "Nonce account",
   });
   const bits = [
     h("h1", {}, ["Who are you paying?"]),
   ];
-  if (state.lookup === "loading") bits.push(h("p", { class: "note" }, ["Looking up your Dogecoin…"]));
+  if (state.lookup === "loading") bits.push(h("p", { class: "note" }, ["Looking up your balance…"]));
   else if (state.lookup === "done") {
-    const total = totalSpendable();
     bits.push(h("p", { class: "money" }, [
-      total === 0n ? "There is no Dogecoin to send yet." : "You have " + friendlyDoge(total) + " DOGE.",
+      state.balance === 0n ? "There is no SOL to send yet." : "You have " + friendlySol(state.balance) + " SOL.",
     ]));
   } else if (state.lookup === "error") {
     bits.push(h("p", { class: "bad" }, ["The lookup did not answer."]));
@@ -454,105 +363,179 @@ function renderPay() {
   bits.push(h("div", { class: "pay-fields" }, [
     h("label", {}, ["Their address", dest]),
     h("label", { class: "amount" }, ["How much?", amount]),
+    h("label", {}, ["Nonce account", nonce]),
+  ]));
+  bits.push(h("p", { class: "note" }, [
+    "Use a durable nonce account this wallet owns. The payment stays valid until it is sent.",
   ]));
   bits.push(h("p", { class: "bad" }, [state.formError]));
   bits.push(h("div", { class: "actions" }, [
     primary("Next", () => submitPay()),
   ]));
-  bits.push(advanced(fee));
   screen.append(...bits);
 }
 
-function advanced(feeInput) {
-  const list = h("ul", { class: "coins" }, spendable().map((coin) => {
-    const box = h("input", { type: "checkbox", checked: coin.checked });
-    box.addEventListener("change", () => { coin.checked = box.checked; });
-    const waiting = coin.confirmations === 0 ? " · waiting" : "";
-    return h("li", {}, [
-      box,
-      h("div", {}, [
-        friendlyDoge(coin.value) + " DOGE",
-        h("span", {}, [coin.txid.slice(-4) + waiting]),
-      ]),
-    ]);
-  }));
-  return h("details", {}, [
-    h("summary", {}, ["More options"]),
-    h("p", { class: "note" }, ["Leave this alone unless a payment will not go through."]),
-    h("label", {}, ["Network fee, DOGE per 1000 bytes", feeInput]),
-    h("p", { class: "note" }, ["Tick coins to choose them yourself. Leave them unticked and we choose."]),
-    list,
-    addCoinForm(),
-  ]);
+function allZero(bytes) {
+  for (const b of bytes) if (b) return false;
+  return true;
+}
+
+const SYSTEM_OWNER = "11111111111111111111111111111111";
+
+function b64ToBytes(text) {
+  const raw = atob(text);
+  const out = new Uint8Array(raw.length);
+  for (let i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+  return out;
+}
+
+function u32le(bytes, off) {
+  return bytes[off]
+    + bytes[off + 1] * 256
+    + bytes[off + 2] * 65536
+    + bytes[off + 3] * 16777216;
+}
+
+function u64le(bytes, off) {
+  let n = 0n;
+  for (let i = 7; i >= 0; i--) n = (n << 8n) + BigInt(bytes[off + i]);
+  return n;
+}
+
+/* Nonce account data is 80 bytes: version, state, authority, nonce, fee. */
+function readNonceAccount(value, walletPub) {
+  if (!value || value.owner !== SYSTEM_OWNER) {
+    return { error: "That account is not a durable nonce." };
+  }
+  const dataField = value.data;
+  if (!dataField || dataField.length < 2 || dataField[1] !== "base64") {
+    return { error: "That account is not a durable nonce." };
+  }
+  let data;
+  try { data = b64ToBytes(dataField[0]); }
+  catch { return { error: "That account is not a durable nonce." }; }
+  if (data.length !== 80) return { error: "That account is not a durable nonce." };
+  const version = u32le(data, 0);
+  const st = u32le(data, 4);
+  if ((version !== 0 && version !== 1) || st !== 1) {
+    return { error: "That account is not a durable nonce." };
+  }
+  if (!hexEq(data.slice(8, 40), walletPub)) {
+    return { error: "That nonce belongs to a different wallet." };
+  }
+  const nonce = data.slice(40, 72);
+  if (allZero(nonce)) return { error: "That nonce is empty." };
+  return { nonce, fee: u64le(data, 72) };
 }
 
 async function submitPay() {
   rememberPay();
   state.formError = "";
   if (state.lookup === "loading") {
-    state.formError = "Still looking up your Dogecoin.";
+    state.formError = "Still looking up your balance.";
     render();
     return;
   }
-  if (state.lookup === "error" && spendable().length === 0) {
-    state.formError = "The lookup did not answer, so there are no coins to send.";
+  if (state.lookup !== "done" || state.balance === null) {
+    state.formError = "The lookup did not answer, so the balance is unknown.";
     render();
     return;
   }
   let dest;
-  try { dest = await decodeAddress(state.destText); }
+  try { dest = decodeAddress(state.destText); }
   catch {
     state.formError = "Check their address and try again.";
     render();
     return;
   }
-  let pay;
-  try { pay = dogeToKoinu(state.amountText); }
-  catch {
-    state.formError = "Enter the amount in Dogecoin.";
+  if (allZero(dest.pubkey)) {
+    state.formError = "That address is not a wallet.";
     render();
     return;
   }
-  if (pay <= 0n) {
+  let lamports;
+  try { lamports = solToLamports(state.amountText); }
+  catch {
+    state.formError = "Enter the amount in SOL.";
+    render();
+    return;
+  }
+  if (lamports <= 0n) {
     state.formError = "Enter an amount greater than zero.";
     render();
     return;
   }
-  let rate;
-  try { rate = feeRatePerByte(state.feeText || "1.0"); }
-  catch {
-    state.formError = "The fee number looks wrong.";
+  const nonceText = state.nonceText.trim();
+  if (!nonceText) {
+    state.formError = "Enter the nonce account.";
     render();
     return;
   }
-  const chosen = checkedCoins();
-  let plan;
-  let inputs;
+  let nonceAcc;
+  try { nonceAcc = decodeAddress(nonceText); }
+  catch {
+    state.formError = "Check the nonce account and try again.";
+    render();
+    return;
+  }
+  if (allZero(nonceAcc.pubkey) || hexEq(nonceAcc.pubkey, state.wallet.pubkey)) {
+    state.formError = "The nonce account has to be its own account.";
+    render();
+    return;
+  }
+  let fee;
+  let nonceValue;
   try {
-    if (chosen.length === 0) {
-      if (spendable().length === 0) throw new Error("This wallet has no Dogecoin to send.");
-      const picked = selectCoins(spendable(), pay, rate, dest.kind === "p2sh");
-      plan = picked;
-      inputs = picked.chosen;
-    } else {
-      if (chosen.length > 4) throw new Error("Pick at most 4 coins.");
-      const total = chosen.reduce((n, c) => n + c.value, 0n);
-      plan = priceFixed(chosen.length, total, pay, rate, dest.kind === "p2sh");
-      if (!plan) throw new Error("Those coins do not cover the payment and the fee.");
-      inputs = chosen;
+    const info = await rpc("getAccountInfo", [
+      nonceAcc.text, { encoding: "base64", commitment: "finalized" },
+    ]);
+    if (!info || info.value === null) {
+      state.formError = "That nonce account was not found.";
+      render();
+      return;
     }
-  } catch (problem) {
-    state.formError = plainPayError(problem.message, pay);
+    const parsed = readNonceAccount(info.value, state.wallet.pubkey);
+    if (parsed.error) {
+      state.formError = parsed.error;
+      render();
+      return;
+    }
+    fee = parsed.fee;
+    nonceValue = parsed.nonce;
+    const destInfo = await rpc("getAccountInfo", [dest.text, { encoding: "base64" }]);
+    if (!destInfo || destInfo.value === null) {
+      const rent = asBig(await rpc("getMinimumBalanceForRentExemption", [0]));
+      if (lamports < rent) {
+        state.formError = "A new account needs at least " + friendlySol(rent) + " SOL.";
+        render();
+        return;
+      }
+    }
+  } catch {
+    state.formError = "The network did not answer. Check your connection.";
+    render();
+    return;
+  }
+  if (state.balance < lamports + fee) {
+    state.formError = "You have " + friendlySol(state.balance) + " SOL. That is not enough.";
     render();
     return;
   }
   state.dest = dest;
-  state.plan = { ...plan, pay, inputs };
+  state.plan = {
+    lamports,
+    nonceAccount: nonceAcc.pubkey,
+    nonce: nonceValue,
+    nonceAccountText: nonceAcc.text,
+    nonceText: b58encode(nonceValue),
+    fee,
+  };
   try {
     state.result = await encodeString({
-      inputs: inputs.map((c) => ({ txid: c.txid, vout: c.vout, value: c.value })),
-      pay, fee: plan.fee, change: plan.change,
-      typeByte: dest.typeByte, hash160: dest.hash160,
+      lamports,
+      dest: dest.pubkey,
+      nonceAccount: nonceAcc.pubkey,
+      nonce: nonceValue,
     });
   } catch (problem) {
     state.formError = problem.message;
@@ -562,24 +545,11 @@ async function submitPay() {
   state.page = 0;
   state.sigParts = [];
   state.sigCount = 0;
-  state.txHex = "";
-  state.txHash = "";
+  state.txB64 = "";
+  state.txSig = "";
   state.sendError = "";
   state.step = "review";
   render();
-}
-
-function plainPayError(message, pay) {
-  if (message.includes("no Dogecoin")) return "This wallet has no Dogecoin to send.";
-  if (message.includes("first 4") || message.includes("at most 4")) {
-    return "That amount is split across too many coins. Try a smaller amount.";
-  }
-  if (message.includes("do not cover")) {
-    const have = totalSpendable();
-    if (have <= pay) return "You have " + friendlyDoge(have) + " DOGE. That is not enough.";
-    return "Keep a little back for the fee, or send a smaller amount.";
-  }
-  return message;
 }
 
 function renderReview() {
@@ -587,16 +557,16 @@ function renderReview() {
   const same = state.dest.text === state.wallet.text;
   const lines = [
     h("h1", {}, ["Check this"]),
-    h("p", { class: "money" }, ["Send " + friendlyDoge(plan.pay) + " DOGE"]),
+    h("p", { class: "money" }, ["Send " + friendlySol(plan.lamports) + " SOL"]),
     h("p", { class: "addr" }, [spaced(state.dest.text)]),
-    h("p", { class: "lead" }, ["The network fee is " + friendlyDoge(plan.fee) + " DOGE."]),
-    h("p", { class: "lead" }, [
-      plan.change === 0n
-        ? "Nothing comes back. The rest goes to the fee."
-        : friendlyDoge(plan.change) + " DOGE comes back to your Game Boy.",
+    h("p", { class: "lead" }, ["Nonce " + plan.nonceText.slice(0, 8) + "…"]),
+    h("p", { class: "addr" }, [spaced(plan.nonceAccountText)]),
+    h("p", { class: "note" }, [
+      "The fee locked in this nonce is " + friendlySol(plan.fee) + " SOL. It is not part of what the Game Boy signs.",
     ]),
+    h("p", { class: "note" }, ["This nonce stays valid until the payment is sent."]),
   ];
-  if (same) lines.push(h("p", { class: "note" }, ["This pays your own Game Boy. Only the fee leaves."]));
+  if (same) lines.push(h("p", { class: "note" }, ["This pays your own Game Boy. Only the network fee leaves."]));
   lines.push(h("div", { class: "actions" }, [
     primary("Show what to type", () => go("type")),
     textButton("Change the amount", () => go("pay")),
@@ -669,6 +639,8 @@ function placeCamera() {
   const video = document.getElementById("cam");
   const slot = document.querySelector(".finder");
   if (!video || !slot || state.step !== "scan") return;
+  // No camera running: keep the black video parked off screen.
+  if (slot.classList.contains("cam-off")) { parkCamera(); return; }
   const box = slot.getBoundingClientRect();
   const vv = window.visualViewport;
   const offsetLeft = vv ? vv.offsetLeft : 0;
@@ -685,10 +657,21 @@ function placeCamera() {
   frame.style.position = "fixed";
   frame.style.zIndex = "3";
   frame.style.inset = "auto";
-  frame.style.left = (box.left + offsetLeft + box.width * 0.12) + "px";
-  frame.style.top = (box.top + offsetTop + box.height * 0.14) + "px";
+  const wantLeft = box.left + box.width * 0.12;
+  const wantTop = box.top + box.height * 0.14;
+  frame.style.left = (wantLeft + offsetLeft) + "px";
+  frame.style.top = (wantTop + offsetTop) + "px";
   frame.style.width = (box.width * 0.76) + "px";
   frame.style.height = (box.height * 0.72) + "px";
+  // A filter, transform or backdrop-filter on an ancestor turns "fixed" into
+  // "relative to that ancestor". Measure where it landed and correct.
+  const got = frame.getBoundingClientRect();
+  const dx = wantLeft - got.left;
+  const dy = wantTop - got.top;
+  if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+    frame.style.left = (parseFloat(frame.style.left) + dx) + "px";
+    frame.style.top = (parseFloat(frame.style.top) + dy) + "px";
+  }
 }
 
 function parkCamera() {
@@ -700,6 +683,16 @@ function parkCamera() {
   video.style.height = "";
   video.style.transform = "";
   video.style.webkitTransform = "";
+}
+
+function scanLead(live) {
+  if (state.scanFor === "signed") return signedProgress();
+  if (!live) {
+    return "This browser cannot open a live camera here (Lockdown Mode, an in-app browser or a non-secure page). Take a photo of the code instead.";
+  }
+  if (!idleCam) return "Starting the camera…";
+  if (state.scanFor === "dest") return "Point the camera at their code.";
+  return "On your Game Boy, open the address code, then point this camera at it. Your words and your key stay on the Game Boy.";
 }
 
 function renderScan() {
@@ -716,18 +709,14 @@ function renderScan() {
   const title = signed ? "Scan the signed codes" : (state.scanFor === "wallet" ? "Scan your Game Boy" : "Scan their code");
   const bits = [
     h("h1", {}, [title]),
-    h("p", { class: "lead" }, [signed
-      ? signedProgress()
-      : (live
-        ? "Tap Allow the camera. Safari will ask before the picture starts."
-        : "Take a photo of the code.")]),
+    h("p", { class: "lead" }, [scanLead(live)]),
   ];
-  if (live) bits.push(h("div", { class: "finder" }, [h("div", { class: "frame" })]));
+  if (live) bits.push(h("div", { class: idleCam ? "finder cam-off" : "finder" }, [h("div", { class: "frame" })]));
   bits.push(h("p", { class: "bad" }, [state.scanError]));
   if (live) {
-    const allow = primary("Allow the camera", askCamera);
-    allow.id = "allow-cam";
-    bits.push(allow);
+    const retry = primary(idleCam ? "Start camera" : "Try camera again", retryCamera);
+    retry.id = "retry-cam";
+    bits.push(retry);
   }
   bits.push(h("label", {
     id: "take-photo",
@@ -740,43 +729,59 @@ function renderScan() {
   if (live) placeCamera();
 }
 
-function askCamera() {
-  if (cameraAsked) return;
-  const video = document.getElementById("cam");
-  const button = document.getElementById("allow-cam");
-  const gen = scanGen;
-  if (!video || !cameraAvailable()) {
-    failCamera(gen, { name: "NotSupportedError" });
-    return;
-  }
-  cameraAsked = true;
-  if (button) button.disabled = true;
-  prepareCamera(video);
-  placeCamera();
-  const prime = video.play();
-  if (prime && prime.catch) prime.catch(() => {});
-  const bad = screen.querySelector(".bad");
-  if (bad) bad.textContent = "Asking for the camera…";
-  requestAnimationFrame(placeCamera);
-  let request;
+// iOS Safari only shows the camera prompt when getUserMedia is called inside
+// the tap itself. So every button that opens the scanner calls this first,
+// synchronously, before any render or await.
+function beginCamera() {
+  if (!cameraAvailable()) return null;
   try {
-    request = navigator.mediaDevices.getUserMedia({
+    return navigator.mediaDevices.getUserMedia({
       audio: false,
       video: { facingMode: { ideal: "environment" } },
     });
   } catch (err) {
-    cameraAsked = false;
-    if (button) button.disabled = false;
-    failCamera(gen, err);
+    return Promise.reject(err);
+  }
+}
+
+// Hook a started request to the scan screen that is now showing.
+function attachCamera(request) {
+  const gen = scanGen;
+  const video = document.getElementById("cam");
+  const retry = document.getElementById("retry-cam");
+  if (!request) return;
+  if (!video || state.step !== "scan") {
+    request.then(stopTracks).catch(() => {});
     return;
   }
+  cameraAsked = true;
+  if (retry) retry.hidden = true;
+  const finder = screen.querySelector(".finder");
+  if (finder) finder.classList.remove("cam-off");
+  prepareCamera(video);
+  placeCamera();
+  const prime = video.play();
+  if (prime && prime.catch) prime.catch(() => {});
+  requestAnimationFrame(placeCamera);
   request.then((got) => {
     gotCamera(gen, got);
   }).catch((err) => {
     cameraAsked = false;
-    if (button) button.disabled = false;
     failCamera(gen, err);
   });
+}
+
+function retryCamera() {
+  if (cameraAsked) return;
+  idleCam = false;
+  const request = beginCamera();
+  state.scanError = "";
+  const bad = screen.querySelector(".bad");
+  if (bad) bad.textContent = "";
+  const lead = screen.querySelector(".lead");
+  if (lead && state.scanFor !== "signed") lead.textContent = "Starting the camera…";
+  if (!request) { failCamera(scanGen, { name: "NotSupportedError" }); return; }
+  attachCamera(request);
 }
 
 function failCamera(gen, problem) {
@@ -793,13 +798,21 @@ function failCamera(gen, problem) {
   if (name === "NotAllowedError") {
     state.scanError = iphone()
       ? "Safari blocked the camera. Tap aA in the address bar, open Website Settings, and allow Camera."
-      : "The browser blocked the camera. Allow it for this site, then tap Allow the camera.";
+      : "The browser blocked the camera. Allow it for this site, then tap Try camera again.";
   } else {
     state.scanError = "The live camera did not start (" + name + "). Take a photo instead.";
   }
   const bad = screen.querySelector(".bad");
   if (bad) bad.textContent = state.scanError;
-  const button = document.getElementById("allow-cam");
+  const finder = screen.querySelector(".finder");
+  if (finder) finder.classList.add("cam-off");
+  const lead = screen.querySelector(".lead");
+  if (lead) {
+    lead.textContent = state.scanFor === "signed"
+      ? signedProgress()
+      : "No live camera. Take a photo of the code, or type it.";
+  }
+  const button = document.getElementById("retry-cam");
   if (button) {
     button.hidden = false;
     button.disabled = false;
@@ -826,7 +839,7 @@ function gotCamera(gen, got) {
         ? signedProgress()
         : "Fill the box with the code. Hold steady.";
     }
-    const button = document.getElementById("allow-cam");
+    const button = document.getElementById("retry-cam");
     if (button) button.hidden = true;
     const bad = screen.querySelector(".bad");
     if (bad && state.scanError === "") bad.textContent = "";
@@ -988,8 +1001,8 @@ function noteScan(err) {
 function clearSigned() {
   state.sigParts = [];
   state.sigCount = 0;
-  state.txHex = "";
-  state.txHash = "";
+  state.txB64 = "";
+  state.txSig = "";
   state.sendError = "";
 }
 
@@ -1027,14 +1040,14 @@ async function useSigned(bytes) {
   if (state.sigParts.length < state.sigCount) return "";
   try {
     const blob = assembleSigBlob(state.sigParts);
-    state.txHex = await buildSignedTx({
-      inputs: state.plan.inputs,
-      pay: state.plan.pay,
-      change: state.plan.change,
-      typeByte: state.dest.typeByte,
-      hash160: state.dest.hash160,
-      walletHash160: state.wallet.hash160,
+    const wire = buildSignedTx({
+      walletPub: state.wallet.pubkey,
+      dest: state.dest.pubkey,
+      nonceAccount: state.plan.nonceAccount,
+      nonce: state.plan.nonce,
+      lamports: state.plan.lamports,
     }, blob);
+    state.txB64 = bytesToBase64(wire);
   } catch (problem) {
     return problem.message;
   }
@@ -1047,30 +1060,33 @@ async function useSigned(bytes) {
 
 function plainSendError(message) {
   const text = String(message || "");
-  if (/missing reference|orphaned|already spent|inputs-missingorspent/i.test(text)) {
-    return "The network did not take it. A coin may already be spent.";
+  if (/nonce|blockhash|expired/i.test(text)) {
+    return "That nonce was already used. Start the payment again.";
   }
-  if (/signature|script-verify|mandatory-script/i.test(text)) {
-    return "The network did not take it. The signature did not match.";
-  }
-  if (/fee|dust/i.test(text)) return "The network did not take it. The fee was not enough.";
+  if (/insufficient/i.test(text)) return "The network did not take it. The balance was not enough.";
+  if (/signature/i.test(text)) return "The network did not take it. The signature did not match.";
   if (text && text.length < 140) return text;
   return "The network did not take it.";
 }
 
 async function broadcast() {
   const gen = ++sendGen;
-  const hex = state.txHex;
-  if (!hex) {
+  const tx = state.txB64;
+  if (!tx) {
     state.sendError = "There is no payment to send.";
     if (state.step === "send") render();
     return;
   }
   try {
-    const res = await fetch("https://api.blockcypher.com/v1/doge/main/txs/push", {
+    const res = await fetch("https://api.mainnet-beta.solana.com", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ tx: hex }),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method: "sendTransaction",
+        params: [tx, { encoding: "base64", preflightCommitment: "finalized" }],
+      }),
     });
     const text = await res.text();
     let data = {};
@@ -1078,11 +1094,12 @@ async function broadcast() {
     catch { data = {}; }
     if (gen !== sendGen || state.step !== "send") return;
     if (!res.ok || data.error) {
-      state.sendError = plainSendError(data.error || "The network did not take it.");
+      const message = data.error && (data.error.message || data.error);
+      state.sendError = plainSendError(message || "The network did not take it.");
       render();
       return;
     }
-    state.txHash = String(data.hash || "");
+    state.txSig = String(data.result || "");
     state.step = "sent";
     render();
   } catch {
@@ -1117,7 +1134,7 @@ function renderSent() {
     h("h1", {}, ["Sent"]),
     h("p", { class: "lead" }, ["The payment is on the network."]),
   ];
-  if (state.txHash) bits.push(h("p", { class: "addr" }, [spaced(state.txHash)]));
+  if (state.txSig) bits.push(h("p", { class: "addr" }, [spaced(state.txSig)]));
   bits.push(h("div", { class: "actions" }, [
     primary("Done", finishPay),
   ]));
@@ -1125,15 +1142,36 @@ function renderSent() {
 }
 
 function startScan(which) {
+  const request = beginCamera();
   rememberPay();
   state.scanFor = which;
   state.scanError = "";
   state.step = "scan";
   cameraAsked = false;
+  idleCam = false;
   render();
+  attachCamera(request);
+}
+
+// The app opens on the wallet camera. Safari on iPhone only starts a camera
+// from a tap, so it shows a Start camera button; other browsers start it
+// at once when permission was already granted.
+function autoStartCamera() {
+  if (!idleCam || iphone() || !cameraAvailable() || !navigator.permissions) return;
+  navigator.permissions.query({ name: "camera" }).then((p) => {
+    if (p.state === "granted" && idleCam && state.step === "scan") retryCamera();
+  }).catch(() => {});
 }
 
 function render() {
+  let opening = false;
+  if (state.step === "home") {
+    state.step = "scan";
+    state.scanFor = "wallet";
+    state.scanError = "";
+    idleCam = true;
+    opening = true;
+  }
   stopCamera();
   parkCamera();
   document.body.classList.toggle("scanning", state.step === "scan");
@@ -1143,7 +1181,7 @@ function render() {
   for (let i = 0; i < 4; i++) {
     dotsEl.append(h("span", { class: i === step ? "on" : "" }, ["●"]));
   }
-  const showBack = state.step !== "home";
+  const showBack = !(state.step === "scan" && state.scanFor === "wallet");
   backBtn.hidden = !showBack;
   backBtn.onclick = () => {
     if (state.step === "scan") {
@@ -1167,6 +1205,7 @@ function render() {
   else if (state.step === "scan") renderScan();
   else if (state.step === "send") renderSend();
   else if (state.step === "sent") renderSent();
+  if (opening) autoStartCamera();
 }
 
 backBtn.addEventListener("click", () => {});

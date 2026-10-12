@@ -21,6 +21,9 @@ void show_progress_page(char* title, char* message) BANKED;
 #define WEIGHT_HASH160      285u
 #define WEIGHT_ADDR_ENCODE  586u
 #define WEIGHT_ADDR_CHECK   293u
+#define WEIGHT_ED_BIT       1u
+#define WEIGHT_ED_INV       1u
+#define WEIGHT_ED_MUL       1u
 
 
 #endif

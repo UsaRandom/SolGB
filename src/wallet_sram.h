@@ -4,20 +4,18 @@
 #include <stdint.h>
 
 #define MAX_SLOTS          8u
-#define ADDRESS_MAX_LEN    35
+#define ADDRESS_MAX_LEN    44
 #define MNEMONIC_MAX_LEN   108
 #define SLOT_DISPLAY_LEN   16
 #define PRIV_KEY_LEN       32
-#define PUB_KEY_LEN        33
+#define PUB_KEY_LEN        32
 
 #define SLOT_USED_MARKER   1u
-#define MAGIC              0x4E494F4345474F44ull //DOGECOIN
+#define MAGIC              0x2121414E414C4F53ull //SOLANA!!
 
 typedef struct {
     uint16_t used;
     char     address[ADDRESS_MAX_LEN + 1];
-    char     pepeaddress[ADDRESS_MAX_LEN + 1];
-    char     bellsaddress[ADDRESS_MAX_LEN + 1];
     char     mnemonic[MNEMONIC_MAX_LEN + 1];
     uint8_t  private_key[PRIV_KEY_LEN];
     uint8_t  public_key[PUB_KEY_LEN];

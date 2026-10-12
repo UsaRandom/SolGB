@@ -10,12 +10,14 @@ Quick checks (seconds):
 
     python3 test/emu/check.py
 
-The full address generation (the ~90 minute GBC workload):
+The full address generation (about 10 minutes on GBC: the 2048 SHA-512
+rounds, then the ed25519 public key):
 
     python3 test/emu/check.py address
 """
 
 import hashlib
+import hmac
 import subprocess
 import sys
 from pathlib import Path
@@ -32,15 +34,9 @@ MNEMONIC = (
     "abandon abandon abandon abandon about"
 )
 
-# Vectors already pinned in src/progress.c.
-KNOWN_ADDRESSES = {
-    "doge": "DBus3bamQjgJULBJtYXpEzDWQRwF5iwxgC",
-    "pepe": "PehYeRLFsRj5jboZXTC6rFHxmYdmV9RdfR",
-    "bells": "BBDr846KrqMvPAUsmSsDpMraFueXWBWgih",
-}
-
-P = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEFFFFFC2F
-GX = 0x79BE667EF9DCBBAC55A06295CE870B07029BFCDB2DCE28D959F2815B16F81798
+# Vector pinned in src/progress.c. SLIP-0010 m/44'/501'/0'/0'.
+KNOWN_ADDRESS = "HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk"
+RFC_PUB = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
 
 
 def build():
@@ -78,20 +74,21 @@ def expect_hex(fields, expected, label):
     return True
 
 
-def python_address(mnemonic, version):
-    from mnemonic import Mnemonic
-    from bip32utils import BIP32Key
+def python_address(mnemonic):
     import base58
+    from mnemonic import Mnemonic
+    import nacl.signing
 
     seed = Mnemonic("english").to_seed(mnemonic, passphrase="")
-    node = BIP32Key.fromEntropy(seed)
-    for index in (44 + 0x80000000, 3 + 0x80000000, 0x80000000, 0, 0):
-        node = node.ChildKey(index)
-    pubkey = node.PublicKey()
-    hash160 = hashlib.new("ripemd160", hashlib.sha256(pubkey).digest()).digest()
-    versioned = bytes([version]) + hash160
-    checksum = hashlib.sha256(hashlib.sha256(versioned).digest()).digest()[:4]
-    return base58.b58encode(versioned + checksum).decode("ascii"), seed, pubkey
+    digest = hmac.new(b"ed25519 seed", seed, hashlib.sha512).digest()
+    key, chain = digest[:32], digest[32:]
+    for index in (0x8000002C, 0x800001F5, 0x80000000, 0x80000000):
+        data = b"\x00" + key + index.to_bytes(4, "big")
+        digest = hmac.new(chain, data, hashlib.sha512).digest()
+        key, chain = digest[:32], digest[32:]
+    pubkey = nacl.signing.SigningKey(key).verify_key.encode()
+    address = base58.b58encode(pubkey).decode("ascii")
+    return address, seed, pubkey
 
 
 def check_sha512():
@@ -99,9 +96,8 @@ def check_sha512():
     return expect_hex(run_rom(1, 60), expected, "sha512 abc")
 
 
-def check_mul():
-    expected = f"{pow(GX, 2, P):064x}"
-    return expect_hex(run_rom(2, 60), expected, "field square")
+def check_ed25519():
+    return expect_hex(run_rom(2, 300), RFC_PUB, "ed25519 pubkey")
 
 
 def check_pbkdf2_once():
@@ -110,42 +106,31 @@ def check_pbkdf2_once():
 
 
 def check_address():
-    doge, seed, pubkey = python_address(MNEMONIC, 0x1E)
-    pepe, _, _ = python_address(MNEMONIC, 0x38)
-    bells, _, _ = python_address(MNEMONIC, 0x19)
-    if (doge, pepe, bells) != (
-        KNOWN_ADDRESSES["doge"],
-        KNOWN_ADDRESSES["pepe"],
-        KNOWN_ADDRESSES["bells"],
-    ):
-        print("python reference does not match the pinned abandon addresses")
-        print(doge, pepe, bells)
+    address, seed, pubkey = python_address(MNEMONIC)
+    if address != KNOWN_ADDRESS:
+        print("python reference does not match the pinned abandon address")
+        print(address)
         return False
 
     fields = run_rom(4, 7200)
     raw = bytes.fromhex(fields.get("hex", ""))
-    if fields.get("ok") != "1" or len(raw) < 202:
+    if fields.get("ok") != "1" or len(raw) < 141:
         print(f"address run failed status {fields.get('status')} len {len(raw)}")
         return False
 
-    got = {
-        "doge": raw[0:35].split(b"\x00", 1)[0].decode(),
-        "pepe": raw[35:70].split(b"\x00", 1)[0].decode(),
-        "bells": raw[70:105].split(b"\x00", 1)[0].decode(),
-    }
-    got_seed = raw[105:169]
-    got_pub = raw[169:202]
+    got = raw[0:45].split(b"\x00", 1)[0].decode()
+    got_seed = raw[45:109]
+    got_pub = raw[109:141]
     gbc = float(fields.get("gbc_sec", "nan"))
     host = fields.get("host_sec", "?")
     print(f"address: host {host}s, gbc est {gbc / 60:.1f} min, frames {fields.get('frames')}")
     ok = True
-    for name in ("doge", "pepe", "bells"):
-        if got[name] != KNOWN_ADDRESSES[name]:
-            print(f"  {name} got  {got[name]}")
-            print(f"  {name} want {KNOWN_ADDRESSES[name]}")
-            ok = False
-        else:
-            print(f"  {name} {got[name]}")
+    if got != KNOWN_ADDRESS:
+        print(f"  address got  {got}")
+        print(f"  address want {KNOWN_ADDRESS}")
+        ok = False
+    else:
+        print(f"  address {got}")
     if got_seed != seed:
         print("  seed mismatch")
         ok = False
@@ -161,9 +146,9 @@ def main():
     if which == "address":
         tests = [check_address]
     elif which == "quick":
-        tests = [check_sha512, check_mul, check_pbkdf2_once]
+        tests = [check_sha512, check_ed25519, check_pbkdf2_once]
     elif which == "all":
-        tests = [check_sha512, check_mul, check_pbkdf2_once, check_address]
+        tests = [check_sha512, check_ed25519, check_pbkdf2_once, check_address]
     else:
         print("usage: check.py [quick|address|all]")
         return 1

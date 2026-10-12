@@ -27,55 +27,36 @@ void progress_ride_begin(uint8_t spread) BANKED;
 void progress_ride_tick(unsigned long done, unsigned long total) BANKED;
 void progress_ride_end(void) BANKED;
 
-/* The first address generation derives the known wallet in these
-   buffers, then the caller's mnemonic. Later calls return at once.
-   Returns 0 when the known addresses do not match. */
+/* The first address generation derives the known wallet in this
+   buffer, then the caller's mnemonic. Later calls return at once.
+   Returns 0 when the known address does not match. */
 uint8_t run_known_addr_check(uint8_t *seed, uint8_t *priv, uint8_t *pub,
-                             char *doge, char *pepe, char *bells) BANKED;
+                             char *address) BANKED;
 
 /* Weights are GBC milliseconds.
    One PBKDF2 iteration is 263 ms (2048 of them).
-   One comb tick is 47 ms (256 per key, three keys).
-   One inverse field op is 50 ms (270 per key, three keys).
-   Hash160 is 285 ms. Each address encoding is 586 ms.
-   Each address check is 293 ms. Three of each.
+   One public key is ED_MULS field multiplies. The SM83 test ROM
+   measured that key at 28.6 s, GBC double speed, so one multiply
+   is 38 ms.
+   Address encoding is 586 ms. The address check is 293 ms.
    One CRC bank is 235 ms.
-   The address page budgets the CRC plus the address ticks.
-   The first address generation adds a second derivation.
+   The address page budgets the CRC plus one derivation.
+   The first address generation adds the known-wallet derivation.
    The boot splash does not use these weights. */
 #define WEIGHT_PBKDF2       263u
-#define WEIGHT_SECP256k1     47u
-#define WEIGHT_INV           50u
-#define WEIGHT_HASH160      285u
 #define WEIGHT_ADDR_ENCODE  586u
 #define WEIGHT_ADDR_CHECK   293u
 #define WEIGHT_CRC_BANK     235u
-#define INVERSE_OPS         270u
+#define ED_MULS             744u
+#define WEIGHT_ED_MUL        38u
 
 #define ADDRESS_WORK_UL (2048UL * WEIGHT_PBKDF2 \
-    + 3UL * 256UL * WEIGHT_SECP256k1 \
-    + 3UL * INVERSE_OPS * WEIGHT_INV \
-    + (unsigned long)WEIGHT_HASH160 \
-    + 3UL * WEIGHT_ADDR_ENCODE \
-    + 3UL * WEIGHT_ADDR_CHECK)
+    + (unsigned long)ED_MULS * (unsigned long)WEIGHT_ED_MUL \
+    + (unsigned long)WEIGHT_ADDR_ENCODE \
+    + (unsigned long)WEIGHT_ADDR_CHECK)
 
-/* Signing page, measured 2026-10-11 with interrupts off.
-   One sighash is 569 ms. RFC 6979 is 2955 ms.
-   One scalar inverse is 1976 ms. One mod-N multiply is 1432 ms,
-   split across 32 ticks of 45 ms. Two multiplies per signature.
-   Pubkey ticks stay inside secp256k1_pubkey.
-   Hash160 of the stored key is the existing 285 ms, once. */
-#define WEIGHT_SIGN_HASH    569u
-#define WEIGHT_SIGN_RFC     2955u
-#define WEIGHT_SIGN_INV     1976u
-#define WEIGHT_SIGN_BIT     45u
-#define SIGN_REDUCE_TICKS   32UL
-#define SIGN_PUB_MS (256UL * WEIGHT_SECP256k1 + (unsigned long)INVERSE_OPS * WEIGHT_INV)
-#define SIGN_PER_INPUT_MS (SIGN_PUB_MS \
-    + (unsigned long)WEIGHT_SIGN_HASH \
-    + (unsigned long)WEIGHT_SIGN_RFC \
-    + (unsigned long)WEIGHT_SIGN_INV \
-    + 2UL * SIGN_REDUCE_TICKS * (unsigned long)WEIGHT_SIGN_BIT)
-#define SIGN_FIXED_MS ((unsigned long)WEIGHT_HASH160)
+/* One signature is one scalarbase. The public key is already stored.
+   The group-order reduction is not in this budget. */
+#define SIGN_WORK_UL ((unsigned long)ED_MULS * (unsigned long)WEIGHT_ED_MUL)
 
-void show_sign_progress(uint8_t n_in) BANKED;
+void show_sign_progress(void) BANKED;

@@ -1,4 +1,4 @@
-PROJECT_NAME = DogeGB
+PROJECT_NAME = SolGB
 CC = ./gbdk/bin/lcc
 
 # Compiler flags
@@ -13,8 +13,7 @@ CFLAGS = -msm83:gb \
          -Ibuild \
          -Isrc/crypto \
          -Iqr \
-         -Isrc \
-         -DDEFAULT_MODE=$(DEFAULT_MODE)
+         -Isrc
 
 # Optimization flags (passed via -Wf)
 OPTFLAGS = # -Wf--opt-code-speed \
@@ -34,27 +33,17 @@ SRC = src/main.c \
       src/assets/keyboard.c \
       src/assets/keyboard_lightgrey.c \
       src/assets/keyboard_base58.c \
-      src/assets/bork.c \
-      src/assets/pepelogo.c \
-      src/assets/bellslogo.c \
-      src/assets/cheems_idle.c \
-      src/assets/cheems_bonk.c \
-      src/assets/cheems_selfbonk.c \
-      src/assets/pepe_idle.c \
-      src/assets/pepe_bonk.c \
-      src/assets/pepe_selfbonk.c \
-      src/assets/bells_idle.c \
-      src/assets/bells_bonk.c \
-      src/assets/bells_selfbonk.c \
+      src/assets/sollogo.c \
+      src/assets/sol_idle.c \
+      src/assets/sol_bonk.c \
+      src/assets/sol_selfbonk.c \
       src/assets/abutton.c \
       src/assets/bbutton.c \
       src/assets/dpadbutton_up.c \
       src/assets/dpadbutton_down.c \
       src/assets/dpadbutton_left.c \
       src/assets/dpadbutton_right.c \
-      src/assets/dogecoin.c \
-      src/assets/pepecoin.c \
-      src/assets/bellscoin.c \
+      src/assets/solcoin.c \
       src/assets/chksum.c \
       src/assets/nophotos.c \
       src/assets/offlineonly.c \
@@ -65,7 +54,6 @@ SRC = src/main.c \
       src/sign_input.c \
       src/sign_review.c \
       src/sign_tx.c \
-      src/crypto/ecdsa.c \
       src/menu.c \
       src/pin.c \
       src/draw.c \
@@ -82,26 +70,22 @@ SRC = src/main.c \
       src/crypto/sha512_transform.c \
       src/crypto/sha512_constants.c \
       src/crypto/hd_wallet.c \
-      src/crypto/secp256k1.c \
-      src/crypto/bn_inv.c \
+      src/crypto/ed25519.c \
+      src/crypto/ed_base.c \
+      src/crypto/ed_base_lo.s \
+      src/crypto/ed_base_hi.s \
       src/crypto/bn_mul.s \
       src/crypto/mul_tables.s \
-      src/crypto/mul977_tab.s \
-      src/crypto/gpow_table.c \
-      src/crypto/gpow_load.c \
-      src/crypto/comb_load.c \
-      src/crypto/comb_mul.c \
+      src/crypto/b58.c \
       src/crypto/hmac.c \
-      src/crypto/ripemd160.c \
       src/crypto/entropy_data.c \
       src/bitrot_rom.c \
       src/bitrot_sum.s \
       src/bitrot_crc.s \
-      src/crypto/b58_decode.s \
       src/bitrot_save.c
 
-.PHONY: entropy test clean postclean assets savedata all doge pepe bells asm-test
-.DEFAULT_GOAL := doge
+.PHONY: entropy test clean postclean assets savedata all sol asm-test
+.DEFAULT_GOAL := sol
 
 bank = 6
 
@@ -110,15 +94,9 @@ savedata:
 	$(CC) -Wf-ba0 -c -o build/wallet_sram.o src/wallet_sram.c
 
 assets:
-	./gbdk/bin/png2asset ./raw_assets/pepe_idle.png -map -noflip -tile_origin 243 -b $(bank) -o ./src/assets/pepe_idle.c
-	./gbdk/bin/png2asset ./raw_assets/pepe_bonk.png -map -noflip -tile_origin 137 -b $(bank) -o ./src/assets/pepe_bonk.c
-	./gbdk/bin/png2asset ./raw_assets/pepe_selfbonk.png -map -noflip -tile_origin 202 -b $(bank) -o ./src/assets/pepe_selfbonk.c
-	./gbdk/bin/png2asset ./raw_assets/cheems_idle.png -map -noflip -tile_origin 243 -b $(bank) -o ./src/assets/cheems_idle.c
-	./gbdk/bin/png2asset ./raw_assets/cheems_bonk.png -map -noflip -tile_origin 137 -b $(bank) -o ./src/assets/cheems_bonk.c
-	./gbdk/bin/png2asset ./raw_assets/cheems_selfbonk.png -map -noflip -tile_origin 202 -b $(bank) -o ./src/assets/cheems_selfbonk.c
-	./gbdk/bin/png2asset ./raw_assets/bells_idle.png -map -noflip -tile_origin 243 -b $(bank) -o ./src/assets/bells_idle.c
-	./gbdk/bin/png2asset ./raw_assets/bells_bonk.png -map -noflip -tile_origin 137 -b $(bank) -o ./src/assets/bells_bonk.c
-	./gbdk/bin/png2asset ./raw_assets/bells_selfbonk.png -map -noflip -tile_origin 202 -b $(bank) -o ./src/assets/bells_selfbonk.c
+	./gbdk/bin/png2asset ./raw_assets/sol_idle.png -map -noflip -tile_origin 243 -b $(bank) -o ./src/assets/sol_idle.c
+	./gbdk/bin/png2asset ./raw_assets/sol_bonk.png -map -noflip -tile_origin 137 -b $(bank) -o ./src/assets/sol_bonk.c
+	./gbdk/bin/png2asset ./raw_assets/sol_selfbonk.png -map -noflip -tile_origin 202 -b $(bank) -o ./src/assets/sol_selfbonk.c
 	./gbdk/bin/png2asset ./raw_assets/abutton.png -map -noflip -tile_origin 186 -b $(bank) -o ./src/assets/abutton.c
 	./gbdk/bin/png2asset ./raw_assets/bbutton.png -map -noflip -tile_origin 190 -b $(bank) -o ./src/assets/bbutton.c
 	./gbdk/bin/png2asset ./raw_assets/dpadbutton_up.png -map -noflip -tile_origin 194 -b $(bank) -o ./src/assets/dpadbutton_up.c
@@ -128,12 +106,8 @@ assets:
 	./gbdk/bin/png2asset ./raw_assets/keyboard.png -map -noflip -tile_origin 88 -b 5 -use_map_attributes -o ./src/assets/keyboard.c
 	./gbdk/bin/png2asset ./raw_assets/keyboard_lightgrey.png -map -noflip -tile_origin 160 -b 5 -use_map_attributes -o ./src/assets/keyboard_lightgrey.c
 	./gbdk/bin/png2asset ./raw_assets/keyboard_base58.png -map -noflip -tile_origin 0 -b 13 -use_map_attributes -o ./src/assets/keyboard_base58.c
-	./gbdk/bin/png2asset ./raw_assets/pepecoin.png -tile_origin 202 -b 1 -o ./src/assets/pepecoin.c
-	./gbdk/bin/png2asset ./raw_assets/bellscoin.png -tile_origin 202 -b 1 -o ./src/assets/bellscoin.c
-	./gbdk/bin/png2asset ./raw_assets/dogecoin.png -tile_origin 202 -b 1 -o ./src/assets/dogecoin.c
-	./gbdk/bin/png2asset ./raw_assets/bork.png -use_map_attributes -map -noflip -tile_origin 0 -b 7 -o ./src/assets/bork.c
-	./gbdk/bin/png2asset ./raw_assets/pepelogo.png -use_map_attributes -map -noflip -tile_origin 0 -b 7 -o ./src/assets/pepelogo.c
-	./gbdk/bin/png2asset ./raw_assets/bellslogo.png -use_map_attributes -map -noflip -tile_origin 0 -b 7 -o ./src/assets/bellslogo.c
+	./gbdk/bin/png2asset ./raw_assets/solcoin.png -tile_origin 202 -b 1 -o ./src/assets/solcoin.c
+	./gbdk/bin/png2asset ./raw_assets/sollogo.png -use_map_attributes -map -noflip -tile_origin 0 -b 7 -o ./src/assets/sollogo.c
 	./gbdk/bin/png2asset ./raw_assets/offlineonly.png -use_map_attributes -map -noflip -tile_origin 0 -b 7 -o ./src/assets/offlineonly.c
 	./gbdk/bin/png2asset ./raw_assets/chksum.png -map -noflip -tile_origin 150 -b 1 -o ./src/assets/chksum.c
 	./gbdk/bin/png2asset ./raw_assets/nophotos.png -map -noflip -tile_origin 150 -b 1 -o ./src/assets/nophotos.c
@@ -151,20 +125,15 @@ entropy:
 	python3 tools/generate_entropy.py
 
 clean:
-	rm -f build/DogeGB.gb build/PepeGB.gb build/BellsGB.gb *.map *.sym *.noi *.ihx *.lk *.adb
+	rm -f build/SolGB.gb *.map *.sym *.noi *.ihx *.lk *.adb
 
 postclean:
 	rm build/*.asm build/*.lst build/*.o build/*.sym
 
-build/%GB.gb: $(SRC) build/wallet_sram.o
-	$(eval STEM_LOWER := $(shell echo $* | tr A-Z a-z))
-	$(eval DEFAULT_MODE := $(if $(findstring doge,$(STEM_LOWER)),0,$(if $(findstring pepe,$(STEM_LOWER)),2,$(if $(findstring bells,$(STEM_LOWER)),1,0))))
+build/SolGB.gb: $(SRC) build/wallet_sram.o
 	$(CC) $(CFLAGS) $(OPTFLAGS) -o $@ $^
-	python3 tools/patch_comb.py $@
 	python3 tools/patch_bitrot.py $@
 
-doge: test savedata build/DogeGB.gb
-pepe: test savedata build/PepeGB.gb
-bells: test savedata build/BellsGB.gb
+sol: test savedata build/SolGB.gb
 
-all: clean test savedata build/DogeGB.gb build/PepeGB.gb build/BellsGB.gb postclean
+all: clean test savedata build/SolGB.gb postclean

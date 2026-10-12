@@ -12,16 +12,12 @@
 #include "menu.h"
 #include "wallet.h"
 #include "wallet_sram.h"
-#include "src/assets/dogecoin.h"
-#include "src/assets/pepecoin.h"
-#include "src/assets/bellscoin.h"
+
 
 #define IDLE_HOLD_FRAMES 120
 #define FLIP_FRAME_DELAY 10
 #define PIN_COIN_SPRITE_BASE 0
 
-
-extern uint8_t current_mode;
 
 static const uint8_t coin_tiles[12] = {1, 2, 3, 2, 1, 0, 1, 2, 3, 2, 1, 0};
 static const uint8_t coin_flips[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};

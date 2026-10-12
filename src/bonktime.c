@@ -8,15 +8,9 @@
 
 #include "src/assets/progress_bar.h"
 #include "progress.h"
-#include "src/assets/cheems_idle.h"
-#include "src/assets/cheems_bonk.h"
-#include "src/assets/cheems_selfbonk.h"
-#include "src/assets/pepe_idle.h"
-#include "src/assets/pepe_bonk.h"
-#include "src/assets/pepe_selfbonk.h"
-#include "src/assets/bells_idle.h"
-#include "src/assets/bells_bonk.h"
-#include "src/assets/bells_selfbonk.h"
+#include "src/assets/sol_idle.h"
+#include "src/assets/sol_bonk.h"
+#include "src/assets/sol_selfbonk.h"
 #include "src/assets/abutton.h"
 #include "src/assets/bbutton.h"
 #include "src/assets/dpadbutton_up.h"
@@ -24,7 +18,6 @@
 #include "src/assets/dpadbutton_left.h"
 #include "src/assets/dpadbutton_right.h"
 #include "bonktime.h"
-#include "wallet.h"
 
 #include "entropy_data.h"
 
@@ -56,9 +49,6 @@
 #define TARGET_NULL 6
 
 
-BANKREF_EXTERN(pepe_bonk)
-
-
 uint8_t _progress = 0;
 uint8_t progress_per_button = 2;
 uint8_t entropy_mode_required_presses = 72;
@@ -78,7 +68,7 @@ uint16_t current_interval = 0;
 
 extern uint16_t pool_ptr;
 extern uint8_t entropy_pool[ENTROPY_POOL_SIZE];
-extern uint8_t current_mode;
+
 
 
 
@@ -119,56 +109,21 @@ void update() BANKED {
     set_bkg_tiles(BAR_X, BAR_Y + 1, BAR_TOTAL_TILES, 1, bot_row);
 }
 
-void set_cheems_state(uint8_t state) BANKED {
+void set_pump_state(uint8_t state) BANKED {
 
     HIDE_BKG;
-    vsync(); 
+    vsync();
     fill_bkg_rect(6, 6, 9, 8, 137);
 
     switch (state) {
         case STATE_IDLE:
-
-            char* map = cheems_idle_map;
-
-            if(current_mode == PEPEGB) {
-                map = pepe_idle_map;
-            }
-            else if (current_mode == BELLSGB) {
-                map = bells_idle_map;
-            }
-     
-            set_bkg_tiles(6, 6, cheems_idle_WIDTH/8, cheems_idle_HEIGHT/8, map);
-    
+            set_bkg_tiles(6, 6, sol_idle_WIDTH/8, sol_idle_HEIGHT/8, sol_idle_map);
             break;
         case STATE_BONK:
-
-            char* bonk_map = cheems_bonk_map;
-
-            if(current_mode == PEPEGB) {
-                bonk_map = pepe_bonk_map;
-            }
-            else if (current_mode == BELLSGB) {
-                bonk_map = bells_bonk_map;
-            }
-     
-            set_bkg_tiles(6, 6, cheems_bonk_WIDTH/8, cheems_bonk_HEIGHT/8, bonk_map);
-    
+            set_bkg_tiles(6, 6, sol_bonk_WIDTH/8, sol_bonk_HEIGHT/8, sol_bonk_map);
             break;
         case STATE_SELF_BONK:
-        
-            char* selfbonk_map = cheems_selfbonk_map;
-
-            if (current_mode == PEPEGB)
-            {
-                selfbonk_map = pepe_selfbonk_map;
-            }
-            else if (current_mode == BELLSGB) {
-                selfbonk_map = bells_selfbonk_map;
-            }
-            
-     
-            set_bkg_tiles(6, 6, cheems_selfbonk_WIDTH/8, cheems_selfbonk_HEIGHT/8, selfbonk_map);
-    
+            set_bkg_tiles(6, 6, sol_selfbonk_WIDTH/8, sol_selfbonk_HEIGHT/8, sol_selfbonk_map);
             break;
     }
 
@@ -312,7 +267,7 @@ uint8_t* bonktime(uint8_t mode) BANKED {
     set_bkg_palette(3, 1, abutton_palettes);
     set_bkg_palette(4, 1, bbutton_palettes);
     set_bkg_palette(7, 1, dpadbutton_up_palettes);
-    set_bkg_palette(5, 1, cheems_idle_palettes);
+    set_bkg_palette(5, 1, sol_idle_palettes);
     
     set_bkg_data(abutton_TILE_ORIGIN, abutton_TILE_COUNT, abutton_tiles);
     set_bkg_data(bbutton_TILE_ORIGIN, bbutton_TILE_COUNT, bbutton_tiles);
@@ -325,24 +280,11 @@ uint8_t* bonktime(uint8_t mode) BANKED {
     use_coin_bar_color();
     set_bkg_data(TILE_BASE, progress_bar_TILE_COUNT, progress_bar_tiles);
 
-    char* gameTitle = "     BONK TIME!\0";
+    const char* gameTitle = "      PUMP IT";
 
-    if(current_mode == DOGEGB){
-        set_bkg_data(243, cheems_idle_TILE_COUNT, cheems_idle_tiles);
-        set_bkg_data(137, cheems_bonk_TILE_COUNT, cheems_bonk_tiles);
-        set_bkg_data(202, cheems_selfbonk_TILE_COUNT, cheems_selfbonk_tiles);
-    } else if (current_mode == BELLSGB) {
-        gameTitle = "     BELL RING!\0";
-        set_bkg_data(243, bells_idle_TILE_COUNT, bells_idle_tiles);
-        set_bkg_data(137, bells_bonk_TILE_COUNT, bells_bonk_tiles);
-        set_bkg_data(202, bells_selfbonk_TILE_COUNT, bells_selfbonk_tiles);
-    } else if (current_mode == PEPEGB) {
-        gameTitle = "     PEPE SAYS!\0";
-        set_bkg_palette(5, 1, pepe_idle_palettes);
-        set_bkg_data(243, pepe_idle_TILE_COUNT, pepe_idle_tiles);
-        set_bkg_data(137, pepe_bonk_TILE_COUNT, pepe_bonk_tiles);
-        set_bkg_data(202, pepe_selfbonk_TILE_COUNT, pepe_selfbonk_tiles);
-    }
+    set_bkg_data(243, sol_idle_TILE_COUNT, sol_idle_tiles);
+    set_bkg_data(137, sol_bonk_TILE_COUNT, sol_bonk_tiles);
+    set_bkg_data(202, sol_selfbonk_TILE_COUNT, sol_selfbonk_tiles);
 
 
 
@@ -377,7 +319,7 @@ uint8_t* bonktime(uint8_t mode) BANKED {
 
     // 3. GAME LOOP INIT
     bonk_current_state = STATE_IDLE;
-    set_cheems_state(STATE_IDLE);
+    set_pump_state(STATE_IDLE);
     target_button = get_next_target();
     draw_target_button(target_button);
 
@@ -499,7 +441,7 @@ uint8_t* bonktime(uint8_t mode) BANKED {
 
                     if (success) {
                         bonk_current_state = STATE_BONK;
-                        set_cheems_state(STATE_BONK);
+                        set_pump_state(STATE_BONK);
                         target_button = TARGET_NULL; 
 
                         if(mode == BONKTIME_ENTROPY_MODE) {
@@ -532,7 +474,7 @@ uint8_t* bonktime(uint8_t mode) BANKED {
                     }
                     else if (wrong) {
                         bonk_current_state = STATE_SELF_BONK;
-                        set_cheems_state(STATE_SELF_BONK);
+                        set_pump_state(STATE_SELF_BONK);
 
 
                         if(mode == BONKTIME_ENTROPY_MODE) {
@@ -573,7 +515,7 @@ uint8_t* bonktime(uint8_t mode) BANKED {
                 anim_timer--;
                 if (anim_timer == 0) {
                     bonk_current_state = STATE_IDLE;
-                    set_cheems_state(STATE_IDLE);
+                    set_pump_state(STATE_IDLE);
                     
                     prompt_timer = MAX_INTERVAL;
                 }

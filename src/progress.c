@@ -31,23 +31,12 @@ static unsigned long work_total = 1UL;
 uint8_t progress_on = 0;
 
 extern volatile uint8_t crc_state[4];
-extern uint8_t current_mode;
 
 static palette_color_t bar_pal[4];
 
-/* Fill is palette index 1. Gold, green, or bronze follows the coin. */
+/* Fill is palette index 1. Same green as the Solana coin. */
 void use_coin_bar_color(void) BANKED {
-    switch (current_mode) {
-        case PEPEGB:
-            bar_pal[1] = RGB8(73, 177, 55);
-            break;
-        case BELLSGB:
-            bar_pal[1] = RGB8(214, 137, 50);
-            break;
-        default:
-            bar_pal[1] = RGB8(247, 183, 22);
-            break;
-    }
+    bar_pal[1] = RGB8(20, 241, 149);
     bar_pal[0] = RGB8(255, 255, 255);
     bar_pal[2] = RGB8(0, 0, 0);
     bar_pal[3] = RGB8(255, 255, 255);
@@ -126,11 +115,12 @@ uint8_t text_x_pos(const char* str) {
     return (20 - len) / 2;
 }
 
-/* First byte after the save block. Slots end at 0xA92A and the CRC
-   scratch table starts at 0xAA00. A raw byte, not a linker symbol,
-   so it cannot shift the slots. 0xA5 means the known derivation
-   matched. 0x00 and 0xFF are a fresh cartridge. */
-#define ADDR_CHECK_ADDR 0xA92Au
+/* First byte after the save block. Eight 220-byte slots start at
+   0xA04A and end at 0xA72A. The CRC scratch table starts at 0xAA00.
+   Confirm _slots in the map after a link. A raw byte, not a linker
+   symbol, so it cannot shift the slots. 0xA5 means the known
+   derivation matched. 0x00 and 0xFF are a fresh cartridge. */
+#define ADDR_CHECK_ADDR 0xA72Au
 #define ADDR_CHECK_DONE 0xA5u
 
 static uint8_t addr_check_byte(void) {
@@ -209,29 +199,27 @@ void show_progress_page() BANKED {
     draw_progress_chrome(title, 0);
 }
 
-void show_sign_progress(uint8_t n_in) BANKED {
+void show_sign_progress(void) BANKED {
     char title[] = "Signing";
-    unsigned long n = n_in;
 
     vsync();
     clear_screen();
     total_work = 0UL;
     total_progress = 0;
     progress_accum = 0;
-    if (n < 1UL) n = 1UL;
-    if (n > 4UL) n = 4UL;
-    work_total = SIGN_FIXED_MS + n * SIGN_PER_INPUT_MS;
+    work_total = SIGN_WORK_UL;
     if (work_total == 0UL) work_total = 1UL;
     progress_on = 1;
     draw_progress_chrome(title, 1);
 }
 
-/* Known abandon wallet. The phrase and the three addresses live in
-   this bank. The caller's buffers are the ones address generation
-   already has. A match is recorded before the caller derives the
-   user's mnemonic. A mismatch leaves the byte alone. */
+/* Known abandon wallet. The phrase and the address live in this
+   bank. Path m/44'/501'/0'/0'. The caller's buffer is the one
+   address generation already has. A match is recorded before the
+   caller derives the user's mnemonic. A mismatch leaves the byte
+   alone. */
 uint8_t run_known_addr_check(uint8_t *seed, uint8_t *priv, uint8_t *pub,
-                             char *doge, char *pepe, char *bells) BANKED {
+                             char *address) BANKED {
     char phrase[109];
 
     if (addr_check_byte() == ADDR_CHECK_DONE) return 1;
@@ -243,14 +231,10 @@ uint8_t run_known_addr_check(uint8_t *seed, uint8_t *priv, uint8_t *pub,
     __asm__("di");
 #endif
 
-    seed_to_addresses(seed, doge, pepe, bells, priv, pub);
+    seed_to_addresses(seed, address, priv, pub);
 
-    if (strcmp(doge, "DBus3bamQjgJULBJtYXpEzDWQRwF5iwxgC") != 0
-        || strcmp(pepe, "PehYeRLFsRj5jboZXTC6rFHxmYdmV9RdfR") != 0
-        || strcmp(bells, "BBDr846KrqMvPAUsmSsDpMraFueXWBWgih") != 0
-        || !validate_checksum(doge)
-        || !validate_checksum(pepe)
-        || !validate_checksum(bells)) {
+    if (strcmp(address, "HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk") != 0
+        || !validate_checksum(address)) {
 #ifndef TEST_MODE
         __asm__("ei");
 #endif

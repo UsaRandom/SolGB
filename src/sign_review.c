@@ -7,30 +7,23 @@
 #include "menu.h"
 #include "sign_review.h"
 #include "sign_tx.h"
-#include "sign_mem.h"
 #include "progress.h"
 #include "pbkdf2.h"
+#include "b58.h"
 #include "bonktime.h"
 #include "src/qr/qr_wrapper.h"
 
 #pragma bank 14
 
-#define DUST_0 0x00u
-#define DUST_1 0x0Fu
-#define DUST_2 0x42u
-#define DUST_3 0x40u
-
 static const char ALPHA[] = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-static const char HEX[] = "0123456789ABCDEF";
 static const uint8_t HASH_CHARS[7] = {7, 6, 12, 11, 10, 9, 8};
 static const uint8_t HASH_BYTES[7] = {5, 4, 8, 8, 7, 6, 5};
 static const uint8_t SPIN[12] = {1, 2, 3, 2, 1, 0, 1, 2, 3, 2, 1, 0};
 
 enum {
-    T_BLANK, T_TO, T_TOADDR, T_PAY, T_REMLBL, T_CHADDR, T_CHANGE,
-    T_WARN, T_SPEND, T_FROM, T_INLBL, T_IN, T_SIGN, T_CANCEL
+    T_BLANK, T_TO, T_TOADDR, T_PAY, T_NONCELBL, T_NONCE, T_SIGN, T_CANCEL
 };
-enum { S_NONE, S_TO, S_REM, S_IN, S_SIGN, S_CANCEL };
+enum { S_NONE, S_TO, S_PAY, S_NONCE, S_SIGN, S_CANCEL };
 
 /* Header is rows 0-2. The list starts on row 4 so that band stays 24px. */
 #define VIEW_Y 4u
@@ -46,12 +39,9 @@ static union {
     } scratch;
     struct {
         char to_short[13];
-        char ch_short[13];
-        char from_line[16];
+        char nonce_short[13];
         char pay_list[20];
         char pay_full[24];
-        char ch_list[20];
-        char ch_full[24];
         uint8_t row_kind[20];
         uint8_t row_arg[20];
         uint8_t stop_row[12];
@@ -60,28 +50,26 @@ static union {
     } view;
 } mem;
 
-#define to_short  mem.view.to_short
-#define ch_short  mem.view.ch_short
-#define from_line mem.view.from_line
-#define pay_list  mem.view.pay_list
-#define pay_full  mem.view.pay_full
-#define ch_list   mem.view.ch_list
-#define ch_full   mem.view.ch_full
-#define row_kind  mem.view.row_kind
-#define row_arg   mem.view.row_arg
-#define stop_row  mem.view.stop_row
-#define stop_code mem.view.stop_code
-#define stop_arg  mem.view.stop_arg
+#define to_short    mem.view.to_short
+#define nonce_short mem.view.nonce_short
+#define pay_list    mem.view.pay_list
+#define pay_full    mem.view.pay_full
+#define row_kind    mem.view.row_kind
+#define row_arg     mem.view.row_arg
+#define stop_row    mem.view.stop_row
+#define stop_code   mem.view.stop_code
+#define stop_arg    mem.view.stop_arg
 
-static uint8_t n_in;
-static uint8_t txid[4][32];
-static uint16_t vout[4];
-static uint8_t has_change;
-static uint8_t dest_type;
-static uint8_t pay_be[8];
-static uint8_t change_be[8];
-static uint8_t dest_h160_be[20];
-static char to_full[36];
+/* These sit outside the union. The decode finishes before they are read
+   back, and the view text overwrites the payload. */
+static uint8_t lamports[8];
+static uint8_t dest_pub[32];
+static uint8_t nonce_acc[32];
+static uint8_t nonce[32];
+static char to_full[45];
+static char nonce_full[45];
+static char nonce_acc_full[45];
+static uint8_t ready;
 static uint8_t nrows;
 static uint8_t nstop;
 static uint8_t si;
@@ -132,67 +120,31 @@ static uint8_t div10(uint8_t *n, uint8_t len) {
     return (uint8_t)rem;
 }
 
-static void add_be(uint8_t *a, const uint8_t *b) {
-    uint8_t i;
-    uint16_t c = 0;
-    for (i = 8u; i > 0u; i--) {
-        c = (uint16_t)(c + a[i - 1u] + b[i - 1u]);
-        a[i - 1u] = (uint8_t)c;
-        c >>= 8;
-    }
-}
-
-static uint8_t sub_be(uint8_t *a, const uint8_t *b) {
-    uint8_t i;
-    uint8_t borrow = 0;
-    for (i = 8u; i > 0u; i--) {
-        uint16_t av = a[i - 1u];
-        uint16_t bv = (uint16_t)b[i - 1u] + borrow;
-        if (av < bv) {
-            a[i - 1u] = (uint8_t)(av + 256u - bv);
-            borrow = 1u;
-        } else {
-            a[i - 1u] = (uint8_t)(av - bv);
-            borrow = 0u;
-        }
-    }
-    return borrow;
-}
-
-static uint8_t below_dust(const uint8_t *n) {
-    static const uint8_t dust[8] = {0, 0, 0, 0, DUST_0, DUST_1, DUST_2, DUST_3};
-    uint8_t i;
-    for (i = 0; i < 8u; i++) {
-        if (n[i] < dust[i]) return 1u;
-        if (n[i] > dust[i]) return 0u;
-    }
-    return 0u;
-}
-
-static void format_amount(const uint8_t be[8], char *list, char *full) {
+/* lamports are little-endian. Nine decimal places. */
+static void format_amount(const uint8_t le[8], char *list, char *full) {
     uint8_t tmp[8];
-    char digs[22];
+    char digs[24];
     uint8_t n = 0;
     uint8_t frac;
     uint8_t intn;
     uint8_t i;
     uint8_t w = 0;
-    memcpy(tmp, be, 8);
+    for (i = 0; i < 8u; i++) tmp[i] = le[7u - i];
     do {
         digs[n++] = (char)('0' + div10(tmp, 8));
-    } while (!is_zero(tmp, 8) && n < 22u);
-    while (n < 8u) digs[n++] = '0';
-    frac = 8u;
-    while (frac > 0u && digs[8u - frac] == '0') frac--;
-    intn = (n > 8u) ? (uint8_t)(n - 8u) : 0u;
+    } while (!is_zero(tmp, 8) && n < 24u);
+    while (n < 9u) digs[n++] = '0';
+    frac = 9u;
+    while (frac > 0u && digs[9u - frac] == '0') frac--;
+    intn = (n > 9u) ? (uint8_t)(n - 9u) : 0u;
     if (intn == 0u) full[w++] = '0';
     for (i = 0; i < intn; i++) full[w++] = digs[n - 1u - i];
     if (frac) {
         full[w++] = '.';
-        for (i = 0; i < frac; i++) full[w++] = digs[7u - i];
+        for (i = 0; i < frac; i++) full[w++] = digs[8u - i];
     }
     full[w] = 0;
-    if (intn > 8u) strcpy(list, ">99999999");
+    if (w >= 20u) strcpy(list, ">99999999999");
     else strcpy(list, full);
 }
 
@@ -288,50 +240,13 @@ static uint8_t decode_groups(char groups[][8], uint8_t end, uint8_t r, uint8_t *
     return 1u;
 }
 
-static uint8_t encode_addr(uint8_t version, const uint8_t h160[20], char *out) {
-    uint8_t raw[25];
-    uint8_t sum1[32];
-    uint8_t sum2[32];
-    uint8_t b58[40];
-    uint8_t n = 0;
-    uint8_t z = 0;
-    uint8_t i;
-    uint8_t j;
-    raw[0] = version;
-    memcpy(raw + 1, h160, 20);
-    sha256_init(&mem.scratch.sha);
-    sha256_update(&mem.scratch.sha, raw, 21);
-    sha256_final(&mem.scratch.sha, sum1);
-    sha256_init(&mem.scratch.sha);
-    sha256_update(&mem.scratch.sha, sum1, 32);
-    sha256_final(&mem.scratch.sha, sum2);
-    memcpy(raw + 21, sum2, 4);
-    while (z < 25u && raw[z] == 0) z++;
-    memset(b58, 0, sizeof b58);
-    for (i = 0; i < 25u; i++) {
-        uint16_t carry = raw[i];
-        for (j = 0; j < n; j++) {
-            carry = (uint16_t)(carry + ((uint16_t)b58[j] << 8));
-            b58[j] = (uint8_t)(carry % 58u);
-            carry = (uint16_t)(carry / 58u);
-        }
-        while (carry) {
-            if (n >= sizeof b58) return 0u;
-            b58[n++] = (uint8_t)(carry % 58u);
-            carry = (uint16_t)(carry / 58u);
-        }
-    }
-    for (i = 0; i < z; i++) *out++ = '1';
-    while (n > 0u) *out++ = ALPHA[b58[--n]];
-    *out = 0;
-    return 1u;
-}
-
 static void append7(char *dst, uint16_t *n, const char *src, uint8_t from, uint8_t to) {
     uint8_t i;
     for (i = from; i < to; i++) dst[(*n)++] = src[i];
 }
 
+/* Payload is 105 bytes: version 0x02, u64 lamports LE, 32-byte
+   destination, 32-byte nonce account, 32-byte nonce value. */
 static uint8_t parse(char groups[][8], uint8_t count, uint8_t r) {
     char hash[16];
     uint16_t hlen = 0;
@@ -341,13 +256,7 @@ static uint8_t parse(char groups[][8], uint8_t count, uint8_t r) {
     uint8_t plen = 0;
     uint8_t got[8];
     uint8_t digest[32];
-    uint8_t fee[8];
-    uint8_t pay[8];
-    uint8_t change[8];
-    uint8_t value[4][8];
-    uint8_t dest_h160[20];
-    uint8_t *p;
-    uint8_t left;
+    ready = 0;
     if (r > 6u || count == 0u) return 0u;
     end = (r >= 2u) ? (uint8_t)(count - 2u) : (uint8_t)(count - 1u);
     if (end >= count) return 0u;
@@ -372,50 +281,22 @@ static uint8_t parse(char groups[][8], uint8_t count, uint8_t r) {
     sha256_final(&mem.scratch.sha, digest);
     if (memcmp(digest, got, HASH_BYTES[r]) != 0) return 0u;
 
-    if (plen < 2u || payload[0] != 0x01u) return 0u;
-    n_in = payload[1];
-    if (n_in < 1u || n_in > 4u) return 0u;
-    left = (uint8_t)(plen - 2u);
-    if (left != (uint8_t)(n_in * 42u + 33u)) return 0u;
-    p = payload + 2;
-    for (g = 0; g < n_in; g++) {
-        memcpy(txid[g], p, 32);
-        p += 32;
-        vout[g] = (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
-        p += 2;
-        memcpy(value[g], p, 8);
-        p += 8;
-    }
-    memcpy(pay, p, 8);
-    p += 8;
-    memset(fee, 0, 8);
-    memcpy(fee + 4, p, 4);
-    p += 4;
-    dest_type = *p++;
-    if (dest_type > 1u) return 0u;
-    memcpy(dest_h160, p, 20);
-    if (!encode_addr(dest_type ? 0x16u : 0x1eu, dest_h160, to_full)) return 0u;
-    /* Address encode was the last user of the scratch. The text below
-       shares those bytes. */
+    if (plen != 105u || payload[0] != 0x02u) return 0u;
+    memcpy(lamports, payload + 1, 8);
+    memcpy(dest_pub, payload + 9, 32);
+    memcpy(nonce_acc, payload + 41, 32);
+    memcpy(nonce, payload + 73, 32);
+    if (is_zero(lamports, 8) || is_zero(dest_pub, 32)) return 0u;
+    if (is_zero(nonce_acc, 32) || is_zero(nonce, 32)) return 0u;
+    /* All three encodes finish before shorten. shorten writes the view
+       union, and that union shares the scratch the payload was in. */
+    if (!b58_encode(dest_pub, 32, to_full, 45)) return 0u;
+    if (!b58_encode(nonce, 32, nonce_full, 45)) return 0u;
+    if (!b58_encode(nonce_acc, 32, nonce_acc_full, 45)) return 0u;
     shorten(to_full, to_short);
-    shorten(current_wallet.address, ch_short);
-    memset(change, 0, 8);
-    for (g = 0; g < n_in; g++) add_be(change, value[g]);
-    if (sub_be(change, pay) || sub_be(change, fee) || below_dust(change)) has_change = 0u;
-    else has_change = 1u;
-    memcpy(pay_be, pay, 8);
-    memcpy(dest_h160_be, dest_h160, 20);
-    if (has_change) memcpy(change_be, change, 8);
-    else memset(change_be, 0, 8);
-    format_amount(pay, pay_list, pay_full);
-    format_amount(change, ch_list, ch_full);
-    from_line[0] = 'f';
-    from_line[1] = 'r';
-    from_line[2] = 'o';
-    from_line[3] = 'm';
-    from_line[4] = ' ';
-    from_line[5] = (char)('0' + n_in);
-    strcpy(from_line + 6, n_in == 1u ? " input" : " inputs");
+    shorten(nonce_full, nonce_short);
+    format_amount(lamports, pay_list, pay_full);
+    ready = 1u;
     return 1u;
 }
 
@@ -432,25 +313,14 @@ static void add_row(uint8_t kind, uint8_t arg, uint8_t stop) {
 }
 
 static void build_rows(void) {
-    uint8_t i;
     nrows = 0;
     nstop = 0;
     add_row(T_TO, 0, S_NONE);
     add_row(T_TOADDR, 0, S_TO);
-    add_row(T_PAY, 0, S_NONE);
+    add_row(T_PAY, 0, S_PAY);
     add_row(T_BLANK, 0, S_NONE);
-    add_row(T_REMLBL, 0, S_NONE);
-    if (has_change) {
-        add_row(T_CHADDR, 0, S_REM);
-        add_row(T_CHANGE, 0, S_NONE);
-    } else {
-        add_row(T_WARN, 0, S_NONE);
-        add_row(T_SPEND, 0, S_NONE);
-        add_row(T_FROM, 0, S_NONE);
-    }
-    add_row(T_BLANK, 0, S_NONE);
-    add_row(T_INLBL, 0, S_NONE);
-    for (i = 0; i < n_in; i++) add_row(T_IN, i, S_IN);
+    add_row(T_NONCELBL, 0, S_NONE);
+    add_row(T_NONCE, 0, S_NONCE);
     add_row(T_BLANK, 0, S_NONE);
     add_row(T_SIGN, 0, S_SIGN);
     add_row(T_CANCEL, 0, S_CANCEL);
@@ -478,31 +348,6 @@ static void draw_right(uint8_t y, const char *s) {
     uint8_t x = (n >= 20u) ? 0u : (uint8_t)(20u - n);
     if (x == 0u && n < 20u) x = 1u;
     draw_at(y, x, s);
-}
-
-static void hex_line(const uint8_t *b, uint8_t n, char *out) {
-    uint8_t i;
-    for (i = 0; i < n; i++) {
-        out[i * 2u] = HEX[b[i] >> 4];
-        out[i * 2u + 1u] = HEX[b[i] & 15u];
-    }
-    out[n * 2u] = 0;
-}
-
-static void draw_input_line(uint8_t y, uint8_t which) {
-    char line[20];
-    char num[6];
-    uint16_t v = vout[which];
-    uint8_t i;
-    hex_line(txid[which], 6, line);
-    line[12] = '-';
-    for (i = 5u; i > 0u; i--) {
-        num[i - 1u] = (char)('0' + (v % 10u));
-        v = (uint16_t)(v / 10u);
-    }
-    num[5] = 0;
-    memcpy(line + 13, num, 6);
-    draw_at(y, 1, line);
 }
 
 static void draw_band(const char *title) {
@@ -537,14 +382,8 @@ static void draw_row(uint8_t i, uint8_t y) {
     case T_TO: draw_bar(y, "To:"); break;
     case T_TOADDR: draw_right(y, to_short); break;
     case T_PAY: draw_right(y, pay_list); break;
-    case T_REMLBL: draw_bar(y, "Remainder:"); break;
-    case T_CHADDR: draw_right(y, ch_short); break;
-    case T_CHANGE: draw_right(y, ch_list); break;
-    case T_WARN: draw_center(y, "[Warning]"); break;
-    case T_SPEND: draw_at(y, 1, "Spending all coins"); break;
-    case T_FROM: draw_center(y, from_line); break;
-    case T_INLBL: draw_bar(y, "Inputs:"); break;
-    case T_IN: draw_input_line(y, row_arg[i]); break;
+    case T_NONCELBL: draw_bar(y, "Nonce:"); break;
+    case T_NONCE: draw_right(y, nonce_short); break;
     case T_SIGN: draw_at(y, 7, "[Sign]"); break;
     case T_CANCEL: draw_at(y, 6, "[Cancel]"); break;
     default: break;
@@ -617,7 +456,7 @@ static void draw_amount_block(uint8_t y, const char *full) {
     for (i = 0; i < n; i++) {
         if (full[i] == '.') dot = i;
     }
-    if (dot == 0xffu) {
+    if (dot == 0xffu || dot >= 16u) {
         draw_right(y, full);
         return;
     }
@@ -629,19 +468,21 @@ static void draw_amount_block(uint8_t y, const char *full) {
     draw_right((uint8_t)(y + 1u), lo);
 }
 
+/* Up to three lines of 20. A Solana address is 32 to 44 characters. */
 static void draw_address_block(uint8_t y, const char *full) {
     uint8_t n = (uint8_t)strlen(full);
-    char a[21];
-    char b[21];
-    if (n <= 20u) {
-        draw_right(y, full);
-        return;
+    char line[21];
+    uint8_t off = 0;
+    uint8_t row = 0;
+    while (off < n && row < 3u) {
+        uint8_t take = (uint8_t)(n - off);
+        if (take > 20u) take = 20u;
+        memcpy(line, full + off, take);
+        line[take] = 0;
+        draw_at((uint8_t)(y + row), 0, line);
+        off = (uint8_t)(off + take);
+        row++;
     }
-    memcpy(a, full, 17);
-    a[17] = 0;
-    strcpy(b, full + 17);
-    draw_right(y, a);
-    draw_right((uint8_t)(y + 1u), b);
 }
 
 static uint8_t amount_lines(const char *full) {
@@ -652,6 +493,13 @@ static uint8_t amount_lines(const char *full) {
         if (full[i] == '.') return 2u;
     }
     return 1u;
+}
+
+static uint8_t addr_lines(const char *full) {
+    uint8_t n = (uint8_t)strlen(full);
+    if (n <= 20u) return 1u;
+    if (n <= 40u) return 2u;
+    return 3u;
 }
 
 /* Two blocks share rows 3-16. Back stays on row 17. */
@@ -674,45 +522,34 @@ static void draw_back(void) {
     SHOW_SPRITES;
 }
 
-static void show_detail(uint8_t code, uint8_t arg) {
+static void show_detail(uint8_t code) {
     uint8_t prev;
     uint8_t y1;
     uint8_t y2;
-    char num[16];
-    uint16_t v;
-    uint8_t i;
-    char line[17];
-    const char *addr;
-    const char *amt;
     move_sprite(0, 0, 0);
     move_sprite(1, 0, 0);
     clear_screen();
-    if (code == S_TO || code == S_REM) {
-        addr = (code == S_TO) ? to_full : current_wallet.address;
-        amt = (code == S_TO) ? pay_full : ch_full;
-        draw_band(code == S_TO ? "To" : "Remainder");
-        block_y((uint8_t)(1u + ((uint8_t)strlen(addr) > 20u ? 2u : 1u)),
-                (uint8_t)(1u + amount_lines(amt)), &y1, &y2);
+    if (code == S_TO) {
+        draw_band("To");
+        block_y((uint8_t)(1u + addr_lines(to_full)),
+                (uint8_t)(1u + amount_lines(pay_full)), &y1, &y2);
         draw_bar(y1, "Address:");
-        draw_address_block((uint8_t)(y1 + 1u), addr);
+        draw_address_block((uint8_t)(y1 + 1u), to_full);
         draw_bar(y2, "Value:");
-        draw_amount_block((uint8_t)(y2 + 1u), amt);
-    } else if (code == S_IN) {
-        draw_band("Input");
-        block_y(4, 1, &y1, &y2);
-        for (i = 0; i < 4u; i++) {
-            hex_line(txid[arg] + i * 8u, 8, line);
-            draw_center((uint8_t)(y1 + i), line);
-        }
-        v = vout[arg];
-        num[0] = 'o'; num[1] = 'u'; num[2] = 't'; num[3] = 'p';
-        num[4] = 'u'; num[5] = 't'; num[6] = ' ';
-        for (i = 5u; i > 0u; i--) {
-            num[6u + i] = (char)('0' + (v % 10u));
-            v = (uint16_t)(v / 10u);
-        }
-        num[12] = 0;
-        draw_center(y2, num);
+        draw_amount_block((uint8_t)(y2 + 1u), pay_full);
+    } else if (code == S_PAY) {
+        draw_band("Amount");
+        block_y((uint8_t)(1u + amount_lines(pay_full)), 0, &y1, &y2);
+        draw_bar(y1, "Value:");
+        draw_amount_block((uint8_t)(y1 + 1u), pay_full);
+    } else if (code == S_NONCE) {
+        draw_band("Nonce");
+        block_y((uint8_t)(1u + addr_lines(nonce_full)),
+                (uint8_t)(1u + addr_lines(nonce_acc_full)), &y1, &y2);
+        draw_bar(y1, "Nonce:");
+        draw_address_block((uint8_t)(y1 + 1u), nonce_full);
+        draw_bar(y2, "Account:");
+        draw_address_block((uint8_t)(y2 + 1u), nonce_acc_full);
     }
     draw_back();
     prev = joypad();
@@ -828,18 +665,17 @@ static uint8_t begin_sign(void) {
     uint16_t scratch_len = 0;
     uint8_t *base;
     uint8_t leave = 0;
-    if (n_in == 0u) return 0u;
+    if (!ready) return 0u;
     if (current_wallet.slotNum < 1u || current_wallet.slotNum > MAX_SLOTS) return 0u;
     move_sprite(0, 0, 0);
     move_sprite(1, 0, 0);
     HIDE_SPRITES;
-    show_sign_progress(n_in);
-    sign_payment(current_wallet.slotNum, n_in, &txid[0][0], vout, has_change,
-                 dest_type, pay_be, change_be, dest_h160_be, &blob_len);
+    show_sign_progress();
+    sign_payment(current_wallet.slotNum, dest_pub, lamports, nonce_acc, nonce, &blob_len);
     progress_ride_end();
     base = kdf_scratch(&scratch_len);
-    if (blob_len && base && scratch_len > sizeof(SignMem)) {
-        show_sig_qrs(base + sizeof(SignMem), blob_len);
+    if (blob_len == 96u && base && scratch_len >= 96u) {
+        show_sig_qrs(base, blob_len);
         leave = 1;
     }
     wipe_scratch();
@@ -922,8 +758,8 @@ uint8_t sign_review_open(char groups[][8], uint8_t count, uint8_t r) BANKED {
             prev = joypad();
         } else if (np & J_A) {
             uint8_t code = stop_code[si];
-            if (code == S_TO || code == S_REM || code == S_IN)
-                show_detail(code, stop_arg[si]);
+            if (code == S_TO || code == S_PAY || code == S_NONCE)
+                show_detail(code);
             else if (code == S_SIGN) {
                 if (begin_sign()) return 2u;
             } else if (code == S_CANCEL && confirm_cancel())

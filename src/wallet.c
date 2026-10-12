@@ -53,11 +53,9 @@ uint8_t has_valid_save(void) {
 
 void save_wallet(uint8_t slot,
                  const char* address,
-                 const char* pepeaddress,
-                 const char* bellsaddress,
                  const char* mnemonic,
                  const uint8_t privkey[32],
-                 const uint8_t pubkey[33]) {
+                 const uint8_t pubkey[PUB_KEY_LEN]) {
     if (slot < 1 || slot > MAX_SLOTS) return;
     
     // memset compiles smaller than a {0} structural initializer
@@ -67,11 +65,9 @@ void save_wallet(uint8_t slot,
     temp.used = SLOT_USED_MARKER;
 
     strncpy(temp.address,      address,      ADDRESS_MAX_LEN);
-    strncpy(temp.pepeaddress,  pepeaddress,  ADDRESS_MAX_LEN);
-    strncpy(temp.bellsaddress, bellsaddress, ADDRESS_MAX_LEN);
     strncpy(temp.mnemonic,     mnemonic,     MNEMONIC_MAX_LEN);
     memcpy(temp.private_key, privkey, 32);
-    memcpy(temp.public_key,  pubkey, 33);
+    memcpy(temp.public_key,  pubkey, PUB_KEY_LEN);
 
     crypt_slot(&temp, pin_hash); 
 
@@ -82,7 +78,7 @@ void save_wallet(uint8_t slot,
     DISABLE_RAM_MBC5;
 }
 
-void get_wallet(uint8_t slot, uint8_t mode, wallet *out) {
+void get_wallet(uint8_t slot, wallet *out) {
     if (slot < 1 || slot > MAX_SLOTS) {
         out->slotNum = 255u;
         return;
@@ -106,10 +102,7 @@ void get_wallet(uint8_t slot, uint8_t mode, wallet *out) {
 
     crypt_slot(&temp, pin_hash);
 
-    char *target_addr = (mode == PEPEGB) ? temp.pepeaddress : 
-                        (mode == BELLSGB) ? temp.bellsaddress : temp.address;
-
-    if (target_addr[0] == '\0') {
+    if (temp.address[0] == '\0') {
         out->slotNum = 255u;
         out->address[0] = '\0';
         out->mnemonic[0] = '\0';
@@ -117,7 +110,7 @@ void get_wallet(uint8_t slot, uint8_t mode, wallet *out) {
     }
 
     out->slotNum = slot;
-    strncpy(out->address,  target_addr, ADDRESS_MAX_LEN + 1);
+    strncpy(out->address,  temp.address, ADDRESS_MAX_LEN + 1);
     strncpy(out->mnemonic, temp.mnemonic, MNEMONIC_MAX_LEN + 1);
 }
 
@@ -172,10 +165,10 @@ void format_address_display(const char* full_address, char* output, uint8_t outp
     }
 }
 
-void list_slots(uint8_t mode, char slots_out[MAX_SLOTS][SLOT_DISPLAY_LEN]) {
+void list_slots(char slots_out[MAX_SLOTS][SLOT_DISPLAY_LEN]) {
     for (uint8_t i = 0; i < MAX_SLOTS; i++) {
         wallet w;
-        get_wallet(i + 1, mode, &w);
+        get_wallet(i + 1, &w);
         if (w.slotNum != 255u && w.address[0] != '\0') {
             format_address_display(w.address, slots_out[i], SLOT_DISPLAY_LEN);
         } else {
