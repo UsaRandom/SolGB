@@ -54,6 +54,52 @@ static void run_sha512(void) {
 }
 
 /* RFC 8032 test 1. One public key, no PBKDF2. */
+extern uint8_t ed_test_reduce(uint8_t s[64]) BANKED;
+
+/* Four reductions: 0, L, 2^256, and 64 bytes of 0xff. */
+static void run_reduce(void) {
+    static const uint8_t order[32] = {
+        0xed, 0xd3, 0xf5, 0x5c, 0x1a, 0x63, 0x12, 0x58,
+        0xd6, 0x9c, 0xf7, 0xa2, 0xde, 0xf9, 0xde, 0x14,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x10
+    };
+    static uint8_t s[64];
+    static uint8_t out[128];
+    uint8_t n;
+    uint8_t i;
+
+    for (n = 0; n < 4u; n++) {
+        memset(s, 0, 64);
+        if (n == 1u) memcpy(s, order, 32);
+        else if (n == 2u) s[32] = 1u;
+        else if (n == 3u) memset(s, 0xff, 64);
+        if (!ed_test_reduce(s)) {
+            finish(0xE5, 0, 0);
+            return;
+        }
+        for (i = 0; i < 32u; i++) out[n * 32u + i] = s[i];
+    }
+    finish(5, out, 128);
+}
+
+static void run_sign(void) {
+    static const uint8_t seed[32] = {
+        0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
+        0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+        0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19,
+        0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60
+    };
+    static uint8_t pub[32];
+    static uint8_t sig[64];
+
+    ed25519_public(seed, pub);
+    if (!ed25519_sign(seed, pub, 0, 0, sig)) {
+        finish(0xE6, 0, 0);
+        return;
+    }
+    finish(6, sig, 64);
+}
+
 static void run_ed25519(void) {
     static const uint8_t seed[32] = {
         0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60,
@@ -126,6 +172,10 @@ void main(void) {
         run_pbkdf2(1, 3);
     } else if (id == 4) {
         run_address();
+    } else if (id == 5) {
+        run_reduce();
+    } else if (id == 6) {
+        run_sign();
     } else {
         finish(id, 0, 0);
     }

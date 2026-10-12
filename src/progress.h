@@ -56,7 +56,7 @@ uint8_t run_known_addr_check(uint8_t *seed, uint8_t *priv, uint8_t *pub,
     + (unsigned long)WEIGHT_ADDR_CHECK)
 
 /* One signature is one scalarbase. The public key is already stored.
-   The group-order reduction is not in this budget. */
+   The group-order reduction is a short table multiply, outside this budget. */
 #define SIGN_WORK_UL ((unsigned long)ED_MULS * (unsigned long)WEIGHT_ED_MUL)
 
 void show_sign_progress(void) BANKED;

@@ -8,6 +8,7 @@ CFLAGS := -msm83:gb \
 	-Wl-ya1 \
 	-Wb-ext=.rel \
 	-Wl-m -Wl-j -Wl-w \
+	-Wf-DED_TEST_REDUCE \
 	-I$(ROOT) \
 	-I$(ROOT)/src \
 	-I$(ROOT)/src/crypto

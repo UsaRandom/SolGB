@@ -37,6 +37,17 @@ MNEMONIC = (
 # Vector pinned in src/progress.c. SLIP-0010 m/44'/501'/0'/0'.
 KNOWN_ADDRESS = "HAgk14JpMQLgt6rVgv7cBQFJWFto5Dqxi472uT3DKpqk"
 RFC_PUB = "d75a980182b10ab7d54bfed3c964073a0ee172f3daa62325af021a68f707511a"
+RFC_SIG = (
+    "e5564300c360ac729086e2cc806e828a84877f1eb8e5d974d873e06522490155"
+    "5fb8821590a33bacc61e39701cf9b46bd25bf5f0595bbe24655141438e7a100b"
+)
+# 0, L, 2^256, and 64 bytes of 0xff, each reduced mod L.
+REDUCE_OUT = (
+    "0000000000000000000000000000000000000000000000000000000000000000"
+    "0000000000000000000000000000000000000000000000000000000000000000"
+    "1d95988d7431ecd670cf7d73f45befc6feffffffffffffffffffffffffffff0f"
+    "000f9c44e31106a447938568a71b0ed065bef517d273ecce3d9a307c1b419903"
+)
 
 
 def build():
@@ -100,6 +111,14 @@ def check_ed25519():
     return expect_hex(run_rom(2, 300), RFC_PUB, "ed25519 pubkey")
 
 
+def check_reduce():
+    return expect_hex(run_rom(5, 60), REDUCE_OUT, "scalar reduce")
+
+
+def check_sign():
+    return expect_hex(run_rom(6, 300), RFC_SIG, "ed25519 sign")
+
+
 def check_pbkdf2_once():
     expected = hashlib.pbkdf2_hmac("sha512", MNEMONIC.encode(), b"mnemonic", 1).hex()
     return expect_hex(run_rom(3, 120), expected, "pbkdf2 x1")
@@ -146,7 +165,7 @@ def main():
     if which == "address":
         tests = [check_address]
     elif which == "quick":
-        tests = [check_sha512, check_ed25519, check_pbkdf2_once]
+        tests = [check_sha512, check_reduce, check_ed25519, check_sign, check_pbkdf2_once]
     elif which == "all":
         tests = [check_sha512, check_ed25519, check_pbkdf2_once, check_address]
     else:

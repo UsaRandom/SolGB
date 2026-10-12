@@ -10,9 +10,13 @@ MUL_BASE        = 20
 
         .globl _bn_mul256_asm
         .globl _bn_sqr256_asm
+        .globl _bn_mul_le_asm
         .globl _bn_mul_pa
         .globl _bn_mul_pb
         .globl _bn_mul_prod
+        .globl _bn_mul_na
+        .globl _bn_mul_nb
+        .globl _bn_mul_end
         .globl _bn_saved_bank
 
 _bn_mul256_asm::
@@ -393,6 +397,141 @@ bn_sqr_rip_dec:
         dec     hl
         jr      bn_sqr_ripple
 
+; Little-endian a[0..na) * b[0..nb). na and nb are at most 32
+; and na+nb is at most 64. The product lands in bn_mul_prod.
+; A zero byte of a is skipped. Column carry stays in 0..255:
+; a byte product is at most 65025, and 255+65025+255 = 65535.
+; Callers leave interrupts off. Restores bn_saved_bank.
+
+_bn_mul_le_asm::
+        xor     a
+        ld      (0x3000), a
+
+        ld      hl, #_bn_mul_prod
+        ld      b, #64
+        xor     a
+bn_le_clr:
+        ld      (hl+), a
+        dec     b
+        jr      nz, bn_le_clr
+
+        xor     a
+        ld      (#_bn_i), a
+
+bn_le_outer:
+        ld      a, (#_bn_i)
+        ld      hl, #_bn_mul_na
+        cp      (hl)
+        jr      c, bn_le_row
+        jp      bn_le_finish
+
+bn_le_row:
+        ld      hl, #_bn_mul_pa
+        ld      a, (hl+)
+        ld      h, (hl)
+        ld      l, a
+        ld      a, (#_bn_i)
+        add     a, l
+        ld      l, a
+        ld      a, h
+        adc     a, #0
+        ld      h, a
+        ld      a, (hl)
+        ld      (#_bn_ai), a
+        or      a
+        jr      z, bn_le_next
+
+        ld      a, (#_bn_ai)
+        rlca
+        rlca
+        rlca
+        and     #0x07
+        add     a, #20
+        ld      (0x2000), a
+
+        ld      a, (#_bn_ai)
+        and     #0x1F
+        add     a, a
+        add     a, #0x40
+        ld      (#_bn_page), a
+
+        ld      hl, #_bn_mul_pb
+        ld      a, (hl+)
+        ld      h, (hl)
+        ld      l, a
+        ld      d, h
+        ld      e, l
+
+        ld      hl, #_bn_mul_prod
+        ld      a, (#_bn_i)
+        add     a, l
+        ld      l, a
+        ld      a, h
+        adc     a, #0
+        ld      h, a
+
+        ld      a, (#_bn_page)
+        ld      c, a
+        ld      b, #0
+        ld      a, (#_bn_mul_nb)
+        ld      (#_bn_n), a
+
+bn_le_inner:
+        ld      a, (de)
+        inc     de
+        push    de
+        push    hl
+        ld      l, a
+        ld      h, c
+        ld      e, (hl)
+        inc     h
+        ld      d, (hl)
+        pop     hl
+        ld      a, (hl)
+        add     a, e
+        jr      nc, bn_le_nohi
+        inc     d
+bn_le_nohi:
+        add     a, b
+        ld      (hl), a
+        ld      a, d
+        adc     a, #0
+        ld      b, a
+        pop     de
+        inc     hl
+        ld      a, (#_bn_n)
+        dec     a
+        ld      (#_bn_n), a
+        jr      nz, bn_le_inner
+
+        ld      a, (hl)
+        add     a, b
+        ld      (hl), a
+        jr      nc, bn_le_next
+bn_le_ripple:
+        inc     hl
+        ld      a, l
+        cp      #<(_bn_mul_end)
+        jr      nz, bn_le_rip_go
+        ld      a, h
+        cp      #>(_bn_mul_end)
+        jr      z, bn_le_next
+bn_le_rip_go:
+        ld      a, (hl)
+        inc     a
+        ld      (hl), a
+        jr      z, bn_le_ripple
+
+bn_le_next:
+        ld      hl, #_bn_i
+        inc     (hl)
+        jp      bn_le_outer
+
+bn_le_finish:
+        ld      a, (#_bn_saved_bank)
+        ld      (0x2000), a
+        ret
+
         .area _BSS
 _bn_mul_pa::
         .ds 2
@@ -400,6 +539,11 @@ _bn_mul_pb::
         .ds 2
 _bn_mul_prod::
         .ds 64
+_bn_mul_end::
+_bn_mul_na::
+        .ds 1
+_bn_mul_nb::
+        .ds 1
 _bn_saved_bank::
         .ds 1
 _bn_i::
